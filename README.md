@@ -2,10 +2,12 @@
 
 **BALOCH SAHAB TECHNOLOGIES (SMC-PRIVATE) LIMITED** · balochsahab.com
 
-Monorepo for the XNAKView platform. This is **Step 1 — Foundation**: a
-production-shaped base for backend, mobile, and admin, with no product
-features (LIVE, dating, gifts, coins, monetization, ads, calls, AI) built
-yet. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phase plan and
+Monorepo for the XNAKView platform. This is **Step 2 — Authentication &
+User Profiles**, built on the Step 1 foundation: real sign-up/sign-in
+(email or phone, server-enforced 18+), JWT sessions, profile
+creation/editing, and admin login — still with no product features (LIVE,
+dating, gifts, coins, monetization, ads, calls, AI) built yet. See
+[`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phase plan and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how everything fits
 together.
 
@@ -58,9 +60,21 @@ cd backend
 cp .env.example .env      # fill in real values — never commit .env
 npm install
 npm run prisma:generate
-npm run prisma:migrate     # applies the Step 1 schema to your database
+npm run prisma:migrate     # applies the schema to your database
 npm run dev                  # http://localhost:4000
 curl http://localhost:4000/api/v1/health
+```
+
+Try registration and login directly:
+
+```bash
+curl -X POST http://localhost:4000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"Str0ng!Passw0rd","dateOfBirth":"1995-01-01"}'
+
+curl -X POST http://localhost:4000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"Str0ng!Passw0rd"}'
 ```
 
 ### 3. Admin
@@ -84,7 +98,7 @@ flutter run --dart-define=API_BASE_URL=http://localhost:4000/api/v1
 
 ```bash
 # Backend
-cd backend && npm run lint && npx tsc --noEmit && npm run build
+cd backend && npm run lint && npx tsc --noEmit && npm run build && npm test
 
 # Admin
 cd admin && npm run lint && npx tsc --noEmit && npm run build

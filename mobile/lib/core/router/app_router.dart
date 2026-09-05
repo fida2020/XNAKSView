@@ -1,17 +1,25 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/auth/domain/auth_state.dart';
 import '../../features/auth/presentation/auth_controller.dart';
 import '../../features/auth/presentation/home_placeholder_screen.dart';
+import '../../features/auth/presentation/register_screen.dart';
 import '../../features/auth/presentation/sign_in_screen.dart';
+import '../../features/profile/presentation/profile_setup_screen.dart';
 import '../../features/splash/presentation/splash_screen.dart';
 
 abstract class AppRoutes {
   static const splash = '/splash';
   static const signIn = '/sign-in';
+  static const register = '/register';
+  static const profileSetup = '/profile-setup';
   static const home = '/home';
+}
+
+extension AppNavigation on BuildContext {
+  void pushRegister() => push(AppRoutes.register);
 }
 
 final appRouterProvider = Provider<GoRouter>((ref) {
@@ -19,7 +27,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     initialLocation: AppRoutes.splash,
     refreshListenable: _AuthStatusListenable(ref),
     redirect: (context, state) {
-      final status = ref.read(authControllerProvider).status;
+      final authState = ref.read(authControllerProvider);
+      final status = authState.status;
       final isOnSplash = state.matchedLocation == AppRoutes.splash;
 
       if (status == AuthStatus.unknown) {
@@ -27,12 +36,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       }
 
       final isAuthenticated = status == AuthStatus.authenticated;
-      final isOnAuthRoute = state.matchedLocation == AppRoutes.signIn;
+      final isOnPublicAuthRoute =
+          state.matchedLocation == AppRoutes.signIn || state.matchedLocation == AppRoutes.register;
 
-      if (!isAuthenticated && !isOnAuthRoute) {
-        return AppRoutes.signIn;
+      if (!isAuthenticated) {
+        return isOnPublicAuthRoute ? null : AppRoutes.signIn;
       }
-      if (isAuthenticated && (isOnAuthRoute || isOnSplash)) {
+
+      // Authenticated but hasn't finished profile setup yet.
+      if (!authState.hasProfile) {
+        return state.matchedLocation == AppRoutes.profileSetup ? null : AppRoutes.profileSetup;
+      }
+
+      if (isOnPublicAuthRoute || isOnSplash || state.matchedLocation == AppRoutes.profileSetup) {
         return AppRoutes.home;
       }
       return null;
@@ -40,6 +56,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(path: AppRoutes.splash, builder: (context, state) => const SplashScreen()),
       GoRoute(path: AppRoutes.signIn, builder: (context, state) => const SignInScreen()),
+      GoRoute(path: AppRoutes.register, builder: (context, state) => const RegisterScreen()),
+      GoRoute(path: AppRoutes.profileSetup, builder: (context, state) => const ProfileSetupScreen()),
       GoRoute(path: AppRoutes.home, builder: (context, state) => const HomePlaceholderScreen()),
     ],
   );
@@ -50,7 +68,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 class _AuthStatusListenable extends ChangeNotifier {
   _AuthStatusListenable(this.ref) {
     ref.listen(authControllerProvider, (previous, next) {
-      if (previous?.status != next.status) {
+      if (previous != next) {
         notifyListeners();
       }
     });

@@ -25,7 +25,9 @@ redis.on('close', () => {
 });
 
 export async function connectRedis(): Promise<void> {
-  await redis.connect();
+  if (redis.status === 'wait' || redis.status === 'end') {
+    await redis.connect();
+  }
 }
 
 export async function disconnectRedis(): Promise<void> {

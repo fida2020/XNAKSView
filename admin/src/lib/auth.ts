@@ -1,19 +1,35 @@
 const SESSION_COOKIE = 'xnakview_admin_session';
-
-/// Auth-ready helper: today this only checks whether a session cookie is
-/// present so route protection has something real to key off of. Phase 2
-/// replaces this with actual session verification (e.g. validating the
-/// token against the backend or a signed session).
-export function hasSessionCookie(cookieHeader: string | undefined | null): boolean {
-  if (!cookieHeader) return false;
-  return cookieHeader
-    .split(';')
-    .map((part) => part.trim())
-    .some((part) => part.startsWith(`${SESSION_COOKIE}=`) && part.length > SESSION_COOKIE.length + 1);
-}
+const REFRESH_COOKIE = 'xnakview_admin_refresh';
 
 export const authConfig = {
   sessionCookieName: SESSION_COOKIE,
+  refreshCookieName: REFRESH_COOKIE,
   loginPath: '/login',
   defaultAuthedPath: '/dashboard',
 };
+
+// Admin sessions mirror the backend's own JWT_ACCESS_TTL / JWT_REFRESH_TTL
+// (15m / 30d) — kept in sync manually since the admin app doesn't share the
+// backend's env config.
+export const SESSION_COOKIE_MAX_AGE_SECONDS = 15 * 60;
+export const REFRESH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+export function sessionCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    path: '/',
+    maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,
+  };
+}
+
+export function refreshCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    path: '/',
+    maxAge: REFRESH_COOKIE_MAX_AGE_SECONDS,
+  };
+}

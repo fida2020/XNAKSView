@@ -1,10 +1,10 @@
 # XNAKView — Roadmap
 
 This roadmap sequences the full product. Each phase builds on the
-foundation established by the phases before it. **Only Phase 1 is
+foundation established by the phases before it. **Phases 1 and 2 are
 implemented today.**
 
-## Phase 1 — Foundation *(current)*
+## Phase 1 — Foundation *(done)*
 
 Monorepo structure; backend bootstrap (Express + TypeScript, Prisma,
 Redis, structured logging, centralized error handling, security
@@ -15,13 +15,22 @@ Next.js admin app skeleton (shell, sidebar, auth-ready route protection);
 local dev infrastructure definition (Docker Compose for Postgres + Redis);
 architecture and roadmap documentation.
 
-## Phase 2 — Authentication / Profile / Verification
+## Phase 2 — Authentication / Profile *(current)*
 
-Real sign-up/sign-in (email, phone, or both), password hashing, JWT
-access/refresh token issuance backed by the `Session` model, session
-revocation, device registration backed by the `Device` model, age
-verification flow backed by the `Verification` model, profile
-creation/edit backed by the `Profile` model, admin console real login.
+Sign-up (email or phone) with server-verified 18+ enforcement, password
+hashing, JWT access tokens + hashed/rotating refresh tokens backed by the
+`Session` model, session revocation, device linking backed by the `Device`
+model, profile creation/edit backed by the `Profile` model, admin console
+real login (against the existing backend auth — no separate admin role
+yet). Redis-backed rate limiting and a per-identifier login lockout. 31
+automated backend tests.
+
+**Deferred to a later phase, not built now:** email/SMS verification codes
+(the `Verification` model exists but nothing populates it yet —
+registration sets accounts `ACTIVE` directly rather than
+`PENDING_VERIFICATION`), admin role/permission model (admin login
+authenticates as any account today), multi-device session management UI
+(the data model — `Session.deviceId` — supports it, no UI built).
 
 ## Phase 3 — Video Feed
 

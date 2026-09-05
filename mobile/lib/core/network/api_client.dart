@@ -94,9 +94,19 @@ class DioApiClient implements ApiClient {
         if (statusCode == 401) {
           return const UnauthorizedException();
         }
+        if (statusCode == 403) {
+          return ForbiddenException(_extractMessage(error) ?? 'This action is not allowed.');
+        }
+        if (statusCode == 409) {
+          return ConflictException(_extractMessage(error) ?? 'That value is already in use.');
+        }
+        if (statusCode == 429) {
+          return RateLimitedException(_extractMessage(error) ?? 'Too many attempts. Please wait and try again.');
+        }
         if (statusCode == 422) {
           return ValidationException(
             _extractMessage(error) ?? 'Validation failed',
+            fieldErrors: _extractFieldErrors(error),
           );
         }
         return ServerException(
@@ -117,5 +127,19 @@ class DioApiClient implements ApiClient {
       return data['error']['message'] as String;
     }
     return null;
+  }
+
+  /// Backend validation errors carry zod's `{fieldErrors: {field: [msg, ...]}}`
+  /// shape under `error.details`.
+  Map<String, List<String>>? _extractFieldErrors(DioException error) {
+    final data = error.response?.data;
+    if (data is! Map) return null;
+    final details = data['error'] is Map ? data['error']['details'] : null;
+    final fieldErrors = details is Map ? details['fieldErrors'] : null;
+    if (fieldErrors is! Map) return null;
+
+    return fieldErrors.map(
+      (key, value) => MapEntry(key as String, (value as List).cast<String>()),
+    );
   }
 }

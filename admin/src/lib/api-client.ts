@@ -23,6 +23,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const { body, accessToken, headers, ...rest } = options;
 
   const response = await fetch(`${env.apiBaseUrl}${path}`, {
+    // Every response from this API can differ per caller (per-user data,
+    // per-token auth results) — Next.js's fetch data cache must never serve
+    // one caller's response to another. `no-store` on every request is not
+    // optional here, it's a correctness/security requirement.
+    cache: 'no-store',
     ...rest,
     headers: {
       'Content-Type': 'application/json',

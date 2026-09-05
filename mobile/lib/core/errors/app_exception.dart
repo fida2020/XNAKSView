@@ -38,6 +38,22 @@ class ValidationException extends AppException {
   final Map<String, List<String>>? fieldErrors;
 }
 
+/// The server understood the request but refuses it on policy grounds —
+/// e.g. under-18 registration, or a suspended/deactivated account.
+class ForbiddenException extends AppException {
+  const ForbiddenException(super.message);
+}
+
+/// The request conflicts with existing state — e.g. an email, phone, or
+/// username that's already taken.
+class ConflictException extends AppException {
+  const ConflictException(super.message);
+}
+
+class RateLimitedException extends AppException {
+  const RateLimitedException([super.message = 'Too many attempts. Please wait and try again.']);
+}
+
 class UnknownException extends AppException {
   // ignore: use_super_parameters
   const UnknownException([String message = 'Something went wrong. Please try again.', Object? cause])

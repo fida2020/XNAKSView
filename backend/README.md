@@ -15,11 +15,14 @@ src/
 │   └── redis.ts                  # ioredis client singleton + health check
 ├── middleware/
 │   ├── requestId.ts                 # X-Request-Id assignment/propagation
-│   ├── rateLimit.ts                    # express-rate-limit
+│   ├── rateLimit.ts                    # express-rate-limit (in-memory + Redis)
 │   ├── validate.ts                        # zod request validation helper
-│   ├── errorHandler.ts                       # Centralized error handling
-│   └── notFound.ts                              # 404 fallback
-├── routes/v1/               # All routes mounted under /api/v1
+│   ├── auth.ts                              # requireAuth: token + live session check
+│   ├── errorHandler.ts                         # Centralized error handling
+│   └── notFound.ts                                # 404 fallback
+├── schemas/                # zod request-body schemas (auth, profile)
+├── routes/v1/               # All routes mounted under /api/v1 (health, auth, me, profile)
+├── test/                # Vitest setup + shared helpers
 └── utils/AppError.ts            # Typed operational error
 ```
 
@@ -63,5 +66,6 @@ npm run prisma:studio             # visual DB browser
 npm run lint
 npx tsc --noEmit
 npm run build
+npm test    # Vitest + Supertest, against a live Postgres/Redis
 npm start   # runs the built dist/server.js
 ```

@@ -2,11 +2,11 @@
 
 **Company:** BALOCH SAHAB TECHNOLOGIES (SMC-PRIVATE) LIMITED
 **Domain:** balochsahab.com
-**Status:** Step 1 — Foundation
+**Status:** Step 2 — Authentication & User Profiles
 
-This document describes the architecture established in Step 1. It will be
-extended, not rewritten, as later phases (see `ROADMAP.md`) add real
-functionality on top of this foundation.
+This document describes the architecture established in Step 1 and
+extended in Step 2. It will be extended further, not rewritten, as later
+phases (see `ROADMAP.md`) add real functionality on top of this foundation.
 
 ## 1. Overall architecture
 
@@ -75,16 +75,27 @@ backend/src/
 ├── lib/
 │   ├── logger.ts           # pino structured logger
 │   ├── prisma.ts            # Prisma client singleton + health check
-│   └── redis.ts               # ioredis client singleton + health check
+│   ├── redis.ts               # ioredis client singleton + health check
+│   ├── password.ts              # bcrypt hash/verify
+│   ├── age.ts                     # server-side age calculation (18+ enforcement)
+│   ├── tokens.ts                    # JWT access tokens + opaque refresh tokens
+│   ├── session.ts                     # issues/rotates Session rows (+ Device link)
+│   └── loginLockout.ts                  # Redis per-identifier brute-force lockout
 ├── middleware/
 │   ├── requestId.ts             # Assigns/propagates X-Request-Id
-│   ├── rateLimit.ts               # express-rate-limit, configurable window/max
+│   ├── rateLimit.ts               # express-rate-limit (in-memory + Redis-backed)
 │   ├── validate.ts                  # zod-based request validation helper
-│   ├── errorHandler.ts               # Centralized error → HTTP response mapping
-│   └── notFound.ts                     # 404 fallback
+│   ├── auth.ts                        # requireAuth: verifies token + live session
+│   ├── errorHandler.ts                  # Centralized error → HTTP response mapping
+│   └── notFound.ts                        # 404 fallback
+├── schemas/                # zod request-body schemas (auth, profile)
 ├── routes/v1/           # All routes mounted under /api/v1
 │   ├── index.ts
-│   └── health.ts
+│   ├── health.ts
+│   ├── auth.ts             # register / login / refresh / logout
+│   ├── me.ts               # GET /me
+│   └── profile.ts          # GET/PUT /profile
+├── test/                # Vitest setup + shared test helpers
 └── utils/
     └── AppError.ts        # Typed operational error with HTTP status mapping
 ```
@@ -145,11 +156,59 @@ Indexes are placed on foreign keys and on fields used for lookup/filtering
 (`status`, `username`, `deviceIdentifier`, `expiresAt`) since those are the
 query patterns an auth/identity system needs from day one.
 
-## 5. Security approach
+`Session.deviceId` (added in Step 2) is an optional foreign key to `Device`
+— when a login/register includes device info, the resulting session is
+linked to it, so a session can be traced back to which device created it.
+This is the minimum needed for future multi-device session management
+(e.g. "sign out this device") without building that UI now.
 
-- **Password hashing**: `passwordHash` is stored, never a raw password;
-  Step 1 defines the column, the actual hashing (e.g. argon2/bcrypt) and
-  auth endpoints arrive in Phase 2.
+## 5. Authentication & session architecture (Step 2)
+
+- **Sign-up**: email or phone (at least one required) + password + date of
+  birth. The server independently computes age from the submitted DOB
+  (`lib/age.ts`) — there is no client-supplied age or `ageVerified` field,
+  and zod strips unrecognized fields before a handler ever sees them, so a
+  client cannot pass one in anyway. Under-18 is rejected outright; no
+  account row is created. `User.ageVerified` is set to `true` only by the
+  server, only once it has confirmed 18+.
+- **Tokens**: a short-lived JWT access token (`JWT_ACCESS_SECRET`, default
+  15m) carries `{ sub: userId, sid: sessionId }`. A long-lived opaque
+  refresh token (default 30d) is returned once to the client; only its
+  SHA-256 hash is persisted (`Session.refreshTokenHash`).
+- **Refresh rotation**: every `/auth/refresh` call revokes the session it
+  was issued from and creates a new one (new access token, new refresh
+  token, same device link). A refresh token can therefore only ever be used
+  once — replaying an old one fails.
+- **Revocation is checked per request, not just left to expire**:
+  `middleware/auth.ts` looks up the session named by the access token's
+  `sid` on every authenticated request and rejects it if revoked or
+  expired. This is an explicit tradeoff (one extra query per authenticated
+  request vs. a fully stateless JWT check) made so that logout, refresh
+  rotation, and account suspension all take effect immediately rather than
+  waiting out the access token's TTL.
+- **Account status**: reuses Step 1's `UserStatus` enum unchanged. Only
+  `ACTIVE` accounts may log in or use an existing session; any other status
+  is rejected with a status-specific message once credentials have already
+  been verified (so it doesn't leak account existence to an attacker who
+  doesn't have the password).
+- **Rate limiting / abuse protection**: `/auth/register`, `/auth/login`,
+  `/auth/refresh` each have a Redis-backed IP rate limiter
+  (`createAuthRateLimiter`, using `rate-limit-redis`), and login additionally
+  has a per-identifier lockout (`lib/loginLockout.ts`) independent of IP —
+  8 failed attempts against the same email/phone within 15 minutes blocks
+  further attempts against *that identifier* regardless of source IP. Redis
+  holds only this kind of ephemeral state; PostgreSQL remains the source of
+  truth for accounts, sessions, and profiles.
+- **Profile authorization**: `PUT/GET /profile` always act on
+  `req.user.id` — there is no route parameter naming a different user, so
+  "a user can only touch their own profile" is a structural property of the
+  routes, not a check that could be forgotten on a new endpoint.
+
+## 7. Security approach
+
+- **Password hashing**: `bcryptjs`, 12 rounds — `passwordHash` is the only
+  form a password ever takes at rest; plaintext is never logged or returned
+  in a response.
 - **Sessions**: `Session.refreshTokenHash` stores a hash, not the raw
   refresh token, so a database leak doesn't directly leak usable tokens.
   JWT access/refresh secrets are environment-provided and validated to be
@@ -158,8 +217,8 @@ query patterns an auth/identity system needs from day one.
 - **Input validation**: zod schemas at the request boundary
   (`middleware/validate.ts`), never trusting client input past that point.
 - **Rate limiting**: a global limiter is applied by default
-  (`middleware/rateLimit.ts`); per-route stricter limiters (e.g. for future
-  login/OTP endpoints) can be composed with `createRateLimiter(...)`.
+  (`middleware/rateLimit.ts`); auth endpoints use the stricter Redis-backed
+  `createAuthRateLimiter`, plus a per-identifier login lockout — see §5.
 - **CORS**: explicit allow-list via `CORS_ORIGINS`, not a wildcard.
 - **Security headers**: `helmet` is applied by default.
 - **Secrets**: only ever read from environment variables, validated at
@@ -170,14 +229,14 @@ query patterns an auth/identity system needs from day one.
   credentials that match `.env.example`, not anything resembling a
   production secret.
 
-## 6. API versioning
+## 8. API versioning
 
 All routes are mounted under `/api/v1`. A future breaking change gets its
 own `/api/v2` mounted alongside `v1` rather than mutating `v1` in place,
 so existing mobile app installs that haven't updated yet keep working
 against the version they were built against.
 
-## 7. Mobile architecture (Android + iOS)
+## 9. Mobile architecture (Android + iOS)
 
 Single Flutter codebase, both platforms built from the same `lib/` source
 — no platform-forked product logic. Clean-architecture-flavored layering:
@@ -187,14 +246,20 @@ mobile/lib/
 ├── app/            # App widget: theme + router wiring
 ├── core/
 │   ├── config/       # Compile-time env config (--dart-define)
-│   ├── errors/         # AppException hierarchy
-│   ├── network/          # ApiClient abstraction (Dio-backed)
-│   ├── router/              # go_router, auth-aware redirects
-│   ├── storage/                # SecureStorage abstraction
-│   ├── theme/                    # AppTheme
-│   └── widgets/                     # Shared widgets
+│   ├── device/         # Non-invasive per-install device identity
+│   ├── errors/           # AppException hierarchy
+│   ├── network/            # ApiClient abstraction (Dio-backed)
+│   ├── router/                # go_router, auth- and profile-aware redirects
+│   ├── storage/                  # SecureStorage abstraction
+│   ├── theme/                       # AppTheme
+│   └── widgets/                        # Shared widgets
 └── features/
-    ├── auth/          # Auth state/controller (Phase 2 builds the real flows)
+    ├── auth/
+    │   ├── data/          # AuthRepository, TokenRefresher
+    │   ├── domain/           # AuthState, UserAccount, ProfileModel
+    │   └── presentation/        # AuthController, sign-in/register screens
+    ├── profile/
+    │   └── presentation/     # Post-registration profile setup screen
     └── splash/
 ```
 
@@ -206,7 +271,24 @@ inside its implementation or by the underlying plugin — not
 `Platform.isAndroid`/`Platform.isIOS` branches scattered through feature
 code.
 
-## 8. Future scalability
+## 10. Admin architecture
+
+Next.js (App Router). `proxy.ts` (Next middleware) verifies every protected
+navigation's session cookie against the backend's `/me` before the page is
+allowed to render — deliberately not just "is a cookie present": a
+cookie-presence-only check would let a revoked or expired session through
+until the next API call happened to fail. Route Handlers under
+`src/app/api/auth/` (`login`, `logout`) are the only place the admin app
+talks to the backend's auth endpoints directly; page components read the
+resulting httpOnly cookies via `next/headers` and call other backend
+endpoints (e.g. `/me`) with the access token as needed.
+
+There is no admin-specific role or permission concept yet — `User` has no
+`role` field, and one wasn't introduced in Step 2 (see
+`STEP2_PROGRESS.md` §4 for why). Admin login today authenticates as any
+XNAKView account; role-gating is real future work, not simulated.
+
+## 11. Future scalability
 
 Step 1 intentionally does not implement LIVE, dating/matching, chat/calls,
 coins/gifts, monetization, ads, or AI moderation — but the foundation is

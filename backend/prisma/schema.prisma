@@ -117,6 +117,8 @@ model Device {
   lastSeenAt DateTime @default(now())
   createdAt  DateTime @default(now())
 
+  sessions Session[]
+
   @@unique([userId, deviceIdentifier])
   @@index([deviceIdentifier])
   @@map("devices")
@@ -128,6 +130,9 @@ model Session {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  deviceId String?
+  device   Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
   refreshTokenHash String @unique
 
   expiresAt DateTime
@@ -136,5 +141,6 @@ model Session {
 
   @@index([userId])
   @@index([expiresAt])
+  @@index([deviceId])
   @@map("sessions")
 }
