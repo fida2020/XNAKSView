@@ -12,17 +12,21 @@ src/
 ├── lib/
 │   ├── logger.ts             # pino structured logger
 │   ├── prisma.ts               # Prisma client singleton + health check
-│   └── redis.ts                  # ioredis client singleton + health check
+│   ├── redis.ts                  # ioredis client singleton + health check
+│   ├── storage.ts                  # StorageDriver abstraction (local disk today)
+│   ├── ffmpeg.ts                      # probe/thumbnail/transcode child processes
+│   └── videoProcessing.ts               # Orchestrates the video processing pipeline
 ├── middleware/
 │   ├── requestId.ts                 # X-Request-Id assignment/propagation
 │   ├── rateLimit.ts                    # express-rate-limit (in-memory + Redis)
 │   ├── validate.ts                        # zod request validation helper
 │   ├── auth.ts                              # requireAuth: token + live session check
-│   ├── errorHandler.ts                         # Centralized error handling
+│   ├── upload.ts                              # multer config for video uploads
+│   ├── errorHandler.ts                          # Centralized error handling
 │   └── notFound.ts                                # 404 fallback
-├── schemas/                # zod request-body schemas (auth, profile)
-├── routes/v1/               # All routes mounted under /api/v1 (health, auth, me, profile)
-├── test/                # Vitest setup + shared helpers
+├── schemas/                # zod request-body schemas (auth, profile, video, admin)
+├── routes/v1/               # All routes mounted under /api/v1 (health, auth, me, profile, videos, feed, follow, admin)
+├── test/                # Vitest setup, shared helpers, fixtures/ (a real sample video)
 └── utils/AppError.ts            # Typed operational error
 ```
 
@@ -46,6 +50,11 @@ Check `/api/v1/health` for live per-dependency status:
 ```bash
 curl http://localhost:4000/api/v1/health
 ```
+
+Video processing requires `ffmpeg`/`ffprobe` on `PATH` (or
+`FFMPEG_PATH`/`FFPROBE_PATH` pointing at them) — without it, uploads will
+be accepted but every video will end up `FAILED` with a real error
+message rather than silently succeeding.
 
 ## Database
 

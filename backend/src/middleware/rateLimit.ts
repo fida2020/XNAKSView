@@ -9,6 +9,10 @@ export const globalRateLimiter = rateLimit({
   limit: env.RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
+  // Automated tests legitimately exceed 100 req/min in a single file (e.g.
+  // a video-heavy suite doing upload + several engagement calls per test) —
+  // see the same rationale on createAuthRateLimiter below.
+  skip: () => isTest,
   message: {
     error: {
       code: 'RATE_LIMITED',

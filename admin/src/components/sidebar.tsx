@@ -2,9 +2,10 @@ import Link from 'next/link';
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard' },
+  { href: '/videos', label: 'Videos' },
+  { href: '/reports', label: 'Reports' },
   // Future sections mount here as their domains ship:
   // { href: '/users', label: 'Users' },
-  // { href: '/moderation', label: 'Moderation' },
   // { href: '/verification', label: 'Verification' },
 ] as const;
 

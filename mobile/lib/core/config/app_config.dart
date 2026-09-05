@@ -34,4 +34,12 @@ class AppConfig {
 
   static const Duration apiConnectTimeout = Duration(seconds: 15);
   static const Duration apiReceiveTimeout = Duration(seconds: 15);
+
+  /// Media (video/thumbnail) URLs from the backend are returned as paths
+  /// relative to the API origin (e.g. `/api/v1/videos/x/file`), not full
+  /// URLs — this resolves one against the configured origin.
+  static Uri resolveMediaUrl(String path) {
+    final base = Uri.parse(apiBaseUrl);
+    return Uri(scheme: base.scheme, host: base.host, port: base.port).resolve(path);
+  }
 }

@@ -1,7 +1,7 @@
 # XNAKView — Roadmap
 
 This roadmap sequences the full product. Each phase builds on the
-foundation established by the phases before it. **Phases 1 and 2 are
+foundation established by the phases before it. **Phases 1-3 are
 implemented today.**
 
 ## Phase 1 — Foundation *(done)*
@@ -15,7 +15,7 @@ Next.js admin app skeleton (shell, sidebar, auth-ready route protection);
 local dev infrastructure definition (Docker Compose for Postgres + Redis);
 architecture and roadmap documentation.
 
-## Phase 2 — Authentication / Profile *(current)*
+## Phase 2 — Authentication / Profile *(done)*
 
 Sign-up (email or phone) with server-verified 18+ enforcement, password
 hashing, JWT access tokens + hashed/rotating refresh tokens backed by the
@@ -32,10 +32,26 @@ registration sets accounts `ACTIVE` directly rather than
 authenticates as any account today), multi-device session management UI
 (the data model — `Session.deviceId` — supports it, no UI built).
 
-## Phase 3 — Video Feed
+## Phase 3 — Video Feed *(current)*
 
-Video upload/storage, feed generation/ranking, likes/comments/shares,
-creator profiles, basic content moderation hooks (rules-based, not AI yet).
+Video upload with real validation and a storage abstraction (local disk
+today, object-storage-ready), a genuine FFmpeg processing pipeline
+(metadata, thumbnails, transcoding), a cursor-paginated feed, likes,
+comments, shares, views (with abuse-resistant deduplication),
+follow/unfollow, video privacy/status (`PROCESSING`/`READY`/`FAILED`/
+`DELETED`, `PUBLIC`/`PRIVATE`), and basic video reporting. Admin gained
+read-only video/report inspection. 67 automated backend tests total (31
+from Steps 1-2 + 36 new).
+
+**Deferred to a later phase, not built now:** a durable cross-restart
+video-processing job queue (processing runs in-process/fire-and-forget
+today — see `docs/ARCHITECTURE.md` §6), report status changes / video
+takedown actions from the admin panel (inspection only), a recommendation/
+ranking model for the feed (newest-first from `/feed` only), a dedicated
+`VideoAsset` table for multiple renditions per video (not needed while
+each video has exactly one playback rendition).
+
+## Phase 4 — LIVE
 
 ## Phase 4 — LIVE
 

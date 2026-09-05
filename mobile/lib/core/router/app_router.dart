@@ -4,11 +4,13 @@ import 'package:go_router/go_router.dart';
 
 import '../../features/auth/domain/auth_state.dart';
 import '../../features/auth/presentation/auth_controller.dart';
-import '../../features/auth/presentation/home_placeholder_screen.dart';
 import '../../features/auth/presentation/register_screen.dart';
 import '../../features/auth/presentation/sign_in_screen.dart';
 import '../../features/profile/presentation/profile_setup_screen.dart';
 import '../../features/splash/presentation/splash_screen.dart';
+import '../../features/video/presentation/creator_profile_screen.dart';
+import '../../features/video/presentation/feed_screen.dart';
+import '../../features/video/presentation/upload_video_screen.dart';
 
 abstract class AppRoutes {
   static const splash = '/splash';
@@ -16,10 +18,17 @@ abstract class AppRoutes {
   static const register = '/register';
   static const profileSetup = '/profile-setup';
   static const home = '/home';
+  static const uploadVideo = '/upload';
+  static const creatorProfile = '/profile';
 }
 
 extension AppNavigation on BuildContext {
   void pushRegister() => push(AppRoutes.register);
+  void pushUploadVideo() => push(AppRoutes.uploadVideo);
+
+  /// Omit [userId] to view the signed-in user's own profile.
+  void pushCreatorProfile({String? userId}) =>
+      push(userId == null ? AppRoutes.creatorProfile : '${AppRoutes.creatorProfile}/$userId');
 }
 
 final appRouterProvider = Provider<GoRouter>((ref) {
@@ -58,7 +67,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: AppRoutes.signIn, builder: (context, state) => const SignInScreen()),
       GoRoute(path: AppRoutes.register, builder: (context, state) => const RegisterScreen()),
       GoRoute(path: AppRoutes.profileSetup, builder: (context, state) => const ProfileSetupScreen()),
-      GoRoute(path: AppRoutes.home, builder: (context, state) => const HomePlaceholderScreen()),
+      GoRoute(path: AppRoutes.home, builder: (context, state) => const FeedScreen()),
+      GoRoute(path: AppRoutes.uploadVideo, builder: (context, state) => const UploadVideoScreen()),
+      GoRoute(path: AppRoutes.creatorProfile, builder: (context, state) => const CreatorProfileScreen()),
+      GoRoute(
+        path: '${AppRoutes.creatorProfile}/:userId',
+        builder: (context, state) => CreatorProfileScreen(userId: state.pathParameters['userId']),
+      ),
     ],
   );
 });

@@ -1,8 +1,8 @@
-// XNAKView — Foundation schema (Step 1)
-// Only identity/foundation models are defined here. Future domains (Video, LIVE,
-// Match, Message, Wallet, Coins, Gifts, Withdrawals, Reports, Moderation, Levels,
-// Teams, ...) will be added in later phases as their own models, relating back to
-// User via userId, without needing to change what's defined here.
+// XNAKView schema — Step 1 (identity/foundation) + Step 3 (video platform).
+// Future domains (LIVE, Match, Message, Wallet, Coins, Gifts, Withdrawals,
+// Moderation, Levels, Teams, ...) will be added in later phases as their own
+// models, relating back to User/Video via foreign keys, without needing to
+// change what's defined here.
 
 generator client {
   provider = "prisma-client-js"
@@ -43,9 +43,9 @@ enum DevicePlatform {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  email        String?  @unique
-  phone        String?  @unique
+  id           String  @id @default(uuid())
+  email        String? @unique
+  phone        String? @unique
   passwordHash String
 
   dateOfBirth DateTime?
@@ -53,13 +53,27 @@ model User {
 
   status UserStatus @default(PENDING_VERIFICATION)
 
+  // Denormalized so profile/feed reads never need a COUNT() query.
+  // Maintained transactionally alongside the Follow rows that back them.
+  followerCount  Int @default(0)
+  followingCount Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profile        Profile?
-  verifications  Verification[]
-  devices        Device[]
-  sessions       Session[]
+  profile       Profile?
+  verifications Verification[]
+  devices       Device[]
+  sessions      Session[]
+
+  videos        Video[]
+  videoLikes    VideoLike[]
+  videoComments VideoComment[]
+  videoViews    VideoView[]
+  videoReports  VideoReport[]
+
+  following Follow[] @relation("Following")
+  followers Follow[] @relation("Followers")
 
   @@index([status])
   @@map("users")
@@ -143,4 +157,167 @@ model Session {
   @@index([expiresAt])
   @@index([deviceId])
   @@map("sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Video platform (Step 3)
+// ---------------------------------------------------------------------------
+
+enum VideoStatus {
+  PROCESSING
+  READY
+  FAILED
+  DELETED
+}
+
+enum VideoVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum VideoReportReason {
+  SPAM
+  NUDITY_OR_SEXUAL_CONTENT
+  VIOLENCE
+  HARASSMENT_OR_BULLYING
+  HATE_SPEECH
+  MISINFORMATION
+  OTHER
+}
+
+enum VideoReportStatus {
+  PENDING
+  REVIEWED
+  DISMISSED
+  ACTIONED
+}
+
+model Video {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  caption String?
+
+  // Storage keys, not URLs — resolved to an actual URL/path through the
+  // storage abstraction (lib/storage) at read time, so switching from local
+  // disk to object storage/CDN later never touches these rows.
+  originalKey  String
+  playbackKey  String?
+  thumbnailKey String?
+
+  durationMs Int?
+  width      Int?
+  height     Int?
+
+  status          VideoStatus     @default(PROCESSING)
+  visibility      VideoVisibility @default(PUBLIC)
+  processingError String?
+
+  // Denormalized counters, maintained transactionally with their owning
+  // rows (VideoLike, VideoComment, VideoView) or incremented directly
+  // (shares have no dedicated table — see docs/STEP3_PROGRESS.md) so the
+  // feed and video-detail reads never need a COUNT() aggregate.
+  likeCount    Int @default(0)
+  commentCount Int @default(0)
+  viewCount    Int @default(0)
+  shareCount   Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  likes    VideoLike[]
+  comments VideoComment[]
+  views    VideoView[]
+  reports  VideoReport[]
+
+  @@index([userId, status, createdAt])
+  @@index([status, visibility, createdAt])
+  @@map("videos")
+}
+
+model VideoLike {
+  id String @id @default(uuid())
+
+  videoId String
+  video   Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([videoId, userId])
+  @@index([userId])
+  @@map("video_likes")
+}
+
+model VideoComment {
+  id String @id @default(uuid())
+
+  videoId String
+  video   Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  text String
+
+  createdAt DateTime @default(now())
+
+  @@index([videoId, createdAt])
+  @@index([userId])
+  @@map("video_comments")
+}
+
+model VideoView {
+  id String @id @default(uuid())
+
+  videoId String
+  video   Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([videoId, createdAt])
+  @@index([userId])
+  @@map("video_views")
+}
+
+model Follow {
+  id String @id @default(uuid())
+
+  followerId  String
+  follower    User   @relation("Following", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User   @relation("Followers", fields: [followingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+  @@map("follows")
+}
+
+model VideoReport {
+  id String @id @default(uuid())
+
+  videoId     String
+  video       Video             @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  reporterId  String
+  reporter    User              @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason      VideoReportReason
+  description String?
+  status      VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One report per user per video — enforced at the database level so
+  // "prevent duplicate report spam" can't be bypassed by a race condition.
+  @@unique([videoId, reporterId])
+  @@index([videoId])
+  @@index([status])
+  @@map("video_reports")
 }

@@ -2,11 +2,12 @@
 
 **Company:** BALOCH SAHAB TECHNOLOGIES (SMC-PRIVATE) LIMITED
 **Domain:** balochsahab.com
-**Status:** Step 2 — Authentication & User Profiles
+**Status:** Step 3 — Video Platform
 
 This document describes the architecture established in Step 1 and
-extended in Step 2. It will be extended further, not rewritten, as later
-phases (see `ROADMAP.md`) add real functionality on top of this foundation.
+extended in Steps 2 and 3. It will be extended further, not rewritten, as
+later phases (see `ROADMAP.md`) add real functionality on top of this
+foundation.
 
 ## 1. Overall architecture
 
@@ -80,22 +81,32 @@ backend/src/
 │   ├── age.ts                     # server-side age calculation (18+ enforcement)
 │   ├── tokens.ts                    # JWT access tokens + opaque refresh tokens
 │   ├── session.ts                     # issues/rotates Session rows (+ Device link)
-│   └── loginLockout.ts                  # Redis per-identifier brute-force lockout
+│   ├── loginLockout.ts                  # Redis per-identifier brute-force lockout
+│   ├── storage.ts                         # StorageDriver abstraction (local disk today)
+│   ├── ffmpeg.ts                            # probe/thumbnail/transcode child-process wrappers
+│   ├── videoProcessing.ts                     # Orchestrates the processing pipeline + retries
+│   ├── videoAccess.ts                           # canViewVideo, serializeVideo, batch like/author/follow lookups
+│   └── pagination.ts                              # Opaque (createdAt, id) cursor encode/decode
 ├── middleware/
 │   ├── requestId.ts             # Assigns/propagates X-Request-Id
 │   ├── rateLimit.ts               # express-rate-limit (in-memory + Redis-backed)
 │   ├── validate.ts                  # zod-based request validation helper
 │   ├── auth.ts                        # requireAuth: verifies token + live session
-│   ├── errorHandler.ts                  # Centralized error → HTTP response mapping
-│   └── notFound.ts                        # 404 fallback
-├── schemas/                # zod request-body schemas (auth, profile)
+│   ├── upload.ts                        # multer config + AppError-mapped upload errors
+│   ├── errorHandler.ts                    # Centralized error → HTTP response mapping
+│   └── notFound.ts                          # 404 fallback
+├── schemas/                # zod request-body schemas (auth, profile, video, admin)
 ├── routes/v1/           # All routes mounted under /api/v1
 │   ├── index.ts
 │   ├── health.ts
 │   ├── auth.ts             # register / login / refresh / logout
 │   ├── me.ts               # GET /me
-│   └── profile.ts          # GET/PUT /profile
-├── test/                # Vitest setup + shared test helpers
+│   ├── profile.ts          # GET/PUT /profile
+│   ├── videos.ts           # upload, detail, delete, file/thumbnail serving, likes, comments, shares, views, reports
+│   ├── feed.ts             # GET /feed
+│   ├── follow.ts           # follow/unfollow, public profile, creator video listing
+│   └── admin.ts            # read-only video/report inspection
+├── test/                # Vitest setup, shared test helpers, and fixtures/ (a real sample video)
 └── utils/
     └── AppError.ts        # Typed operational error with HTTP status mapping
 ```
@@ -162,6 +173,15 @@ linked to it, so a session can be traced back to which device created it.
 This is the minimum needed for future multi-device session management
 (e.g. "sign out this device") without building that UI now.
 
+Step 3 added the video platform models — **Video** (owner, storage keys
+for its original/playback/thumbnail assets, status, visibility,
+denormalized engagement counters), **VideoLike**/**VideoComment**/
+**VideoView** (each foreign-keyed to both `Video` and `User`),
+**Follow** (a self-referential `User`-to-`User` edge), and
+**VideoReport**. See `STEP3_PROGRESS.md` §1 for the full field-by-field
+rationale, including why a separate `VideoAsset` table and a `VideoShare`
+table were deliberately *not* created.
+
 ## 5. Authentication & session architecture (Step 2)
 
 - **Sign-up**: email or phone (at least one required) + password + date of
@@ -204,6 +224,53 @@ This is the minimum needed for future multi-device session management
   "a user can only touch their own profile" is a structural property of the
   routes, not a check that could be forgotten on a new endpoint.
 
+## 6. Video platform architecture (Step 3)
+
+- **Storage is abstracted, not hardcoded to local disk.** `lib/storage.ts`
+  defines a `StorageDriver` interface (`putFromLocalPath`, `read` with an
+  optional byte range, `delete`, `exists`, `getPublicUrl`,
+  `getLocalReadPath`). `Video` rows store **keys**
+  (`videos/{id}/playback.mp4`), never filesystem paths — every read goes
+  through the driver. The only implementation today is local disk
+  (`STORAGE_LOCAL_DIR`); adding S3/R2/etc. later means implementing this
+  one interface, not touching routes or models. `getPublicUrl()` returns
+  `null` for local storage, so the video-file route proxies/streams bytes
+  itself (with real HTTP Range support); a driver backed by real object
+  storage would return a signed URL there instead, and the route would
+  redirect — callers don't need to know which.
+- **Processing is a real pipeline, not a status flag.** `lib/ffmpeg.ts`
+  wraps `ffprobe`/`ffmpeg` as child processes for metadata extraction,
+  thumbnail capture, and H.264/AAC transcoding. `lib/videoProcessing.ts`
+  orchestrates probe → thumbnail → transcode → store outputs → mark
+  `READY` with the real extracted duration/width/height, retrying
+  transient failures twice before marking the video `FAILED` with the
+  actual error — a video is never marked `READY` without a genuine
+  successful transcode. Runs in-process, fire-and-forget from the upload
+  request; a durable job queue (e.g. BullMQ on the existing Redis) is the
+  natural next step once upload volume warrants it, not built prematurely.
+- **Cursor-based pagination**, not offset. Every list endpoint (`/feed`,
+  comments, creator video listings, admin lists) uses an opaque
+  `(createdAt, id)` cursor (`lib/pagination.ts`). Offset pagination
+  re-numbers rows whenever something is inserted ahead of the current
+  page, causing duplicates or skips across fetches; a cursor tied to a
+  specific row doesn't have that problem, and `id` breaks ties on equal
+  timestamps.
+- **Visibility is centralized.** `lib/videoAccess.ts`'s `canViewVideo()`
+  (owner always; everyone else only `READY` + `PUBLIC`) is the single rule
+  every read path applies — the general feed, a creator's video listing to
+  a non-owner, and direct-by-id lookups. A non-owner requesting a video
+  they can't see gets a plain `404`, not a `403`, so existence isn't
+  confirmed to someone who shouldn't see it.
+- **Engagement counters are transactional, not eventually-consistent.**
+  Likes/comments/shares/views update `Video`'s denormalized counters in
+  the same `prisma.$transaction` as the row that backs them, so a feed or
+  detail read never needs a `COUNT()` aggregate, and a counter can't drift
+  from the rows that justify it. Duplicate-abuse protection differs by
+  what's being protected: likes/reports use a database unique constraint
+  (race-condition-safe); views/shares use a short Redis dedupe window
+  (60s / 3s) sized to absorb accidental duplicate requests without
+  capping legitimate repeated engagement over time.
+
 ## 7. Security approach
 
 - **Password hashing**: `bcryptjs`, 12 rounds — `passwordHash` is the only
@@ -219,6 +286,19 @@ This is the minimum needed for future multi-device session management
 - **Rate limiting**: a global limiter is applied by default
   (`middleware/rateLimit.ts`); auth endpoints use the stricter Redis-backed
   `createAuthRateLimiter`, plus a per-identifier login lockout — see §5.
+  Video upload and every engagement action (like, comment, share, view,
+  report, follow) each have their own Redis-backed limiter for the same
+  reason. The global limiter and all `createAuthRateLimiter` instances are
+  skipped in the test environment (`isTest`) — automated tests legitimately
+  exceed normal per-minute limits within a single file; this was a real
+  bug (only the auth limiter was skipped, not the global one) found and
+  fixed while building Step 3's test suite, not a design decision made in
+  advance.
+- **Upload validation is real, not mimetype-only**: `probeVideo` actually
+  decodes an uploaded file with `ffprobe` before a `Video` row is created;
+  a non-video file renamed with a `.mp4` extension is rejected with the
+  real decoder error, not just a `Content-Type` check (which is trivially
+  spoofable).
 - **CORS**: explicit allow-list via `CORS_ORIGINS`, not a wildcard.
 - **Security headers**: `helmet` is applied by default.
 - **Secrets**: only ever read from environment variables, validated at
@@ -260,6 +340,12 @@ mobile/lib/
     │   └── presentation/        # AuthController, sign-in/register screens
     ├── profile/
     │   └── presentation/     # Post-registration profile setup screen
+    ├── video/
+    │   ├── data/          # VideoRepository (feed, upload w/ progress, engagement, follow)
+    │   ├── domain/           # VideoModel, CommentModel, UserProfileSummary
+    │   └── presentation/        # FeedController, the vertical pager, comment sheet,
+    │                             # upload screen (progress/processing/error states),
+    │                             # creator profile screen
     └── splash/
 ```
 
@@ -288,11 +374,19 @@ There is no admin-specific role or permission concept yet — `User` has no
 `STEP2_PROGRESS.md` §4 for why). Admin login today authenticates as any
 XNAKView account; role-gating is real future work, not simulated.
 
+Step 3 added video/report inspection pages (`/videos`, `/videos/[id]`,
+`/reports`, `/reports/[id]`) and `api/media/[...path]/route.ts` — a Route
+Handler that proxies any backend media path through the admin's own
+session. Browser `<img>`/`<video>` tags can't attach an `Authorization`
+header the way `fetch()` can, so this exists for the same reason the
+backend proxies its own local-disk storage behind an authenticated route.
+
 ## 11. Future scalability
 
-Step 1 intentionally does not implement LIVE, dating/matching, chat/calls,
-coins/gifts, monetization, ads, or AI moderation — but the foundation is
-shaped so those can be added without rework:
+Steps 1-3 intentionally do not implement LIVE, dating/matching,
+chat/calls, coins/gifts, monetization, ads, advanced recommendation AI, or
+AI moderation — but the foundation is shaped so those can be added without
+rework:
 
 - **Database**: new domains are new Prisma models foreign-keyed to `User`;
   nothing in the Step 1 schema needs to change to support them.
@@ -303,10 +397,11 @@ shaped so those can be added without rework:
   natural backbone for presence, pub/sub, and ephemeral state once those
   features are built; no new "add a cache layer" migration is needed later.
 - **Background/async work** (payouts, moderation queues, notification
-  fan-out): not needed yet, but the backend's dependency-tolerant startup
-  pattern (background connect, live health reporting) extends naturally to
-  a future queue/worker dependency the same way it applies to Postgres and
-  Redis today.
+  fan-out, and — concretely, now — durable video processing): video
+  processing today runs in-process/fire-and-forget (see §6); the backend's
+  dependency-tolerant startup pattern (background connect, live health
+  reporting) extends naturally to a future queue/worker dependency on the
+  same Redis instance the same way it applies to Postgres and Redis today.
 - **Mobile/Admin**: both already depend on the backend exclusively through
   an abstraction (`ApiClient` / `apiClient`), so switching transport details
   (e.g. adding a WebSocket connection for LIVE alongside REST) doesn't

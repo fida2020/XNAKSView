@@ -2,11 +2,12 @@
 
 **BALOCH SAHAB TECHNOLOGIES (SMC-PRIVATE) LIMITED** · balochsahab.com
 
-Monorepo for the XNAKView platform. This is **Step 2 — Authentication &
-User Profiles**, built on the Step 1 foundation: real sign-up/sign-in
-(email or phone, server-enforced 18+), JWT sessions, profile
-creation/editing, and admin login — still with no product features (LIVE,
-dating, gifts, coins, monetization, ads, calls, AI) built yet. See
+Monorepo for the XNAKView platform. This is **Step 3 — Video Platform**,
+built on Steps 1-2 (foundation, then auth/profiles): short-form video
+upload with real processing (FFmpeg transcoding + thumbnails), a
+vertical feed, likes/comments/shares/views, follow/unfollow, and video
+reporting — still with no LIVE, dating, chat, calls, coins, gifts,
+monetization, ads, or advanced AI built yet. See
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phase plan and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how everything fits
 together.
@@ -41,6 +42,7 @@ and tooling — start there for app-specific detail:
 | Docker | `infrastructure/` | Optional locally — needed to run Postgres/Redis via Compose |
 | PostgreSQL 16 | `backend/` | Via Docker Compose, or a local install |
 | Redis 7 | `backend/` | Via Docker Compose, or a local install |
+| FFmpeg (`ffmpeg` + `ffprobe`) | `backend/` | Required for video processing — must be on `PATH`, or point `FFMPEG_PATH`/`FFPROBE_PATH` at it |
 
 ## Quick start
 
@@ -75,6 +77,21 @@ curl -X POST http://localhost:4000/api/v1/auth/register \
 curl -X POST http://localhost:4000/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"you@example.com","password":"Str0ng!Passw0rd"}'
+```
+
+Upload a video (replace `$TOKEN` with the `accessToken` from either call
+above) and watch it process:
+
+```bash
+curl -X POST http://localhost:4000/api/v1/videos \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "video=@/path/to/a/real/video.mp4" \
+  -F "caption=My first video"
+
+# Poll until status leaves PROCESSING:
+curl http://localhost:4000/api/v1/videos/<id> -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:4000/api/v1/feed -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 3. Admin

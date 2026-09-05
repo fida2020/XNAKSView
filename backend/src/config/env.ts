@@ -23,6 +23,17 @@ const envSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+
+  // Storage is abstracted behind lib/storage — STORAGE_DRIVER is the only
+  // thing that needs to change to move from local disk to object storage
+  // (e.g. S3) later; nothing else in the codebase references the disk path
+  // directly.
+  STORAGE_DRIVER: z.enum(['local']).default('local'),
+  STORAGE_LOCAL_DIR: z.string().default('storage'),
+  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(200 * 1024 * 1024),
+
+  FFMPEG_PATH: z.string().default('ffmpeg'),
+  FFPROBE_PATH: z.string().default('ffprobe'),
 });
 
 export type Env = z.infer<typeof envSchema>;

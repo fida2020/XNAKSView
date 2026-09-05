@@ -12,7 +12,12 @@ import '../storage/secure_storage.dart';
 abstract class ApiClient {
   Future<Response<T>> get<T>(String path, {Map<String, dynamic>? queryParameters});
 
-  Future<Response<T>> post<T>(String path, {Object? data});
+  Future<Response<T>> post<T>(
+    String path, {
+    Object? data,
+    void Function(int sent, int total)? onSendProgress,
+    Duration? sendTimeout,
+  });
 
   Future<Response<T>> put<T>(String path, {Object? data});
 
@@ -58,8 +63,20 @@ class DioApiClient implements ApiClient {
       _guard(() => _dio.get<T>(path, queryParameters: queryParameters));
 
   @override
-  Future<Response<T>> post<T>(String path, {Object? data}) =>
-      _guard(() => _dio.post<T>(path, data: data));
+  Future<Response<T>> post<T>(
+    String path, {
+    Object? data,
+    void Function(int sent, int total)? onSendProgress,
+    Duration? sendTimeout,
+  }) =>
+      _guard(
+        () => _dio.post<T>(
+          path,
+          data: data,
+          onSendProgress: onSendProgress,
+          options: sendTimeout != null ? Options(sendTimeout: sendTimeout) : null,
+        ),
+      );
 
   @override
   Future<Response<T>> put<T>(String path, {Object? data}) =>

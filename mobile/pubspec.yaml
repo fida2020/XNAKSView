@@ -50,6 +50,12 @@ dependencies:
   # Value equality for models/state
   equatable: ^2.0.5
 
+  # Vertical video feed playback
+  video_player: ^2.9.2
+
+  # Picking a video from the gallery to upload
+  image_picker: ^1.1.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

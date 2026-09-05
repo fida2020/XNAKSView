@@ -8,7 +8,10 @@ beforeAll(async () => {
   await connectRedis();
   // Start each test run from a clean slate against the real dev database/Redis.
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE sessions, devices, verifications, profiles, users RESTART IDENTITY CASCADE',
+    `TRUNCATE TABLE
+      video_reports, video_views, video_comments, video_likes, videos, follows,
+      sessions, devices, verifications, profiles, users
+     RESTART IDENTITY CASCADE`,
   );
   await redis.flushdb();
 });

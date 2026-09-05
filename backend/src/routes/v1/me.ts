@@ -18,6 +18,8 @@ meRouter.get('/me', requireAuth, async (req, res, next) => {
       phone: user.phone,
       status: user.status,
       ageVerified: user.ageVerified,
+      followerCount: user.followerCount,
+      followingCount: user.followingCount,
       createdAt: user.createdAt,
       profile: user.profile
         ? {

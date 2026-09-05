@@ -5,3 +5,7 @@ dist/
 *.log
 coverage/
 .DS_Store
+
+# Local video storage (uploads, transcoded output, thumbnails) — this is
+# the local StorageDriver's data directory, never source, and can be large.
+/storage/

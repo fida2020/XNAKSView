@@ -1,8 +1,13 @@
+import path from 'path';
+
 import request from 'supertest';
 
 import { createApp } from '@/app';
 
 export const app = createApp();
+
+export const SAMPLE_VIDEO_PATH = path.join(__dirname, 'fixtures', 'sample.mp4');
+export const NOT_A_VIDEO_PATH = path.join(__dirname, 'fixtures', 'not-a-video.txt');
 
 let counter = 0;
 export function uniqueEmail(): string {
@@ -37,3 +42,28 @@ export async function registerUser(overrides: Partial<Record<string, unknown>> =
 }
 
 export { STRONG_PASSWORD };
+
+export async function uploadSampleVideo(
+  accessToken: string,
+  overrides: { caption?: string; visibility?: 'PUBLIC' | 'PRIVATE' } = {},
+) {
+  let req = request(app).post('/api/v1/videos').set('Authorization', `Bearer ${accessToken}`).attach('video', SAMPLE_VIDEO_PATH);
+  if (overrides.caption !== undefined) req = req.field('caption', overrides.caption);
+  if (overrides.visibility !== undefined) req = req.field('visibility', overrides.visibility);
+  return req;
+}
+
+/** Polls until the video leaves PROCESSING (i.e. reaches READY or FAILED), or times out. */
+export async function waitForVideoSettled(videoId: string, accessToken: string, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const response = await request(app).get(`/api/v1/videos/${videoId}`).set('Authorization', `Bearer ${accessToken}`);
+    if (response.body.status !== 'PROCESSING') {
+      return response;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`Video ${videoId} did not leave PROCESSING within ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}

@@ -24,6 +24,12 @@ export function errorHandlerMiddleware(
 ): void {
   const requestId = req.requestId ?? 'unknown';
 
+  // If we're rejecting a request that's still uploading a body (e.g. auth
+  // fails before a multipart video upload finishes streaming), draining the
+  // rest of the incoming body before responding avoids the client seeing a
+  // raw ECONNRESET instead of our actual error response.
+  req.resume();
+
   if (err instanceof AppError) {
     if (!err.isOperational) {
       logger.error({ err, requestId }, 'Non-operational AppError');
