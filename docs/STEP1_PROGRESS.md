@@ -4,6 +4,13 @@ Last updated: 2026-09-05 — **STEP 1 COMPLETE AND PUSHED TO GITHUB.**
 Repo: https://github.com/fida2020/XNAKSView · branch `master` · working tree
 clean, local HEAD matches `origin/master`.
 
+Follow-up pass (same day): re-verified the Android+iOS mobile foundation
+end-to-end (`flutter doctor`, `flutter analyze`, `flutter build apk
+--debug` — all clean), closed the one open backend TODO below with real
+captured evidence, and fixed a stale doc reference. No product code
+changed; foundation behavior is unchanged, just now fully verified and
+documented.
+
 Project location: `C:\Users\Asia Computer\Desktop\XNAKView`
 GitHub target (per user): `https://github.com/fida2020/XNAKSView.git` (note: repo name has an extra "S" vs project name "XNAKView" — used exactly as given)
 
@@ -25,7 +32,13 @@ GitHub target (per user): `https://github.com/fida2020/XNAKSView.git` (note: rep
 - Prisma schema (`backend/prisma/schema.prisma`): User, Profile, Verification, Device, Session models + enums (UserStatus, VerificationStatus, VerificationType, DevicePlatform). Validated with `prisma validate` — OK.
 - `npm install`, `npx prisma generate`, `npx tsc --noEmit`, `npm run build`, `npm run lint` — all pass clean.
 - Verified `dist/` output has path aliases correctly rewritten (tsc-alias).
-- Ran `node dist/server.js` manually — confirmed it logs Redis/Postgres connection errors (expected, since neither is installed) without hanging, would reach "listening" log (need to re-verify after the fire-and-forget fix — **TODO: re-run and capture final health check output for the report**).
+- Re-ran `node dist/server.js` on 2026-09-05 (post fire-and-forget fix) and captured live evidence, closing the earlier open TODO on this item:
+  - Server bound to port 4000 immediately; did not block on Postgres/Redis.
+  - `curl http://localhost:4000/api/v1/health` → `HTTP 503`, body:
+    `{"status":"degraded","dependencies":{"database":{"ok":false,"error":"Can't reach database server at `localhost:5432`..."},"cache":{"ok":false,"error":"Reached the max retries per request limit..."}}}`
+    — exactly the expected shape given Postgres/Redis are still not installed.
+  - Also verified the EADDRINUSE hardening for real: started a second instance while the first was still bound to port 4000 — it logged a single clear `Port 4000 is already in use` error and exited immediately (no hang, no confusing double error, no crash trace).
+  - Cleaned up: process stopped after the check, confirmed via `Get-Process node` that no node processes were left running.
 - `.env` created locally (gitignored) with random JWT secrets for dev; `.env.example` has placeholders only.
 
 ### Mobile (`mobile/`) — COMPLETE, tested
@@ -88,7 +101,12 @@ tested — documented honestly in the README rather than faked.
 
 ## Known leftover (harmless, not part of project)
 
-`C:\src\XNAKView\backend\node_modules\.prisma\client\query_engine-windows.dll.node` — one file left behind from the move due to a Windows file lock (a stray `node.exe` process, since killed). The rest of `C:\src\XNAKView` was successfully removed. This is not part of the project anymore (everything is now under `Desktop\XNAKView`) — safe to delete manually later, not worth fighting the lock now.
+`C:\src\XNAKView\` — checked 2026-09-05: the previously-locked file is gone
+and only empty directories (`backend/`) remain. Not part of the project
+(everything is under `Desktop\XNAKView`); a recursive delete of this path
+was blocked by this session's own safety guard as an unnecessary
+destructive action outside the repo, so it's left for manual removal via
+File Explorer whenever convenient — harmless either way.
 
 ## User's explicit constraints (don't violate)
 

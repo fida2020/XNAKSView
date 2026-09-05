@@ -23,7 +23,7 @@ XNAKView/
 Each app is self-contained with its own `README.md`, dependency manifest,
 and tooling — start there for app-specific detail:
 
-- [`backend/README.md`](backend/README.md) *(see backend's own docs/comments if not yet written — for now, see below)*
+- [`backend/README.md`](backend/README.md)
 - [`mobile/README.md`](mobile/README.md)
 - [`admin/README.md`](admin/README.md)
 - [`infrastructure/README.md`](infrastructure/README.md)
