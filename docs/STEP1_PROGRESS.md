@@ -1,6 +1,8 @@
 # STEP 1 — Foundation: Progress Log
 
-Last updated: 2026-09-05 (live — update this file as work continues)
+Last updated: 2026-09-05 — **STEP 1 COMPLETE AND PUSHED TO GITHUB.**
+Repo: https://github.com/fida2020/XNAKSView · branch `master` · working tree
+clean, local HEAD matches `origin/master`.
 
 Project location: `C:\Users\Asia Computer\Desktop\XNAKView`
 GitHub target (per user): `https://github.com/fida2020/XNAKSView.git` (note: repo name has an extra "S" vs project name "XNAKView" — used exactly as given)
@@ -44,18 +46,45 @@ GitHub target (per user): `https://github.com/fida2020/XNAKSView.git` (note: rep
 - Manually smoke-tested with `npm run start`: confirmed unauthenticated `/` correctly 307-redirects to `/login?redirectTo=%2F` (route protection works), `/login` returns 200.
 - `admin/README.md` written.
 
-## Not started yet (do these next, in this order)
+## Docs — COMPLETE
+`docs/ARCHITECTURE.md` and `docs/ROADMAP.md` written (Phases 1-12).
 
-1. **Docs** — `docs/ARCHITECTURE.md` and `docs/ROADMAP.md`. Not created yet.
-2. **Root files** — root `README.md`, root `.gitignore` (covering `.env`, secrets, `node_modules`, Flutter build/cache, Next.js build, logs, local DB files, IDE/system files).
-3. **Git/GitHub**:
-   - `git init` already done at the old `C:\src\XNAKView` location and preserved through the move (`.git` folder moved along with everything else via robocopy — confirm `git status` still recognizes it after the move).
-   - Need to `git add`/commit everything once all pieces above exist.
-   - Need to add remote `https://github.com/fida2020/XNAKSView.git` and push. **Not yet asked the user how they want to authenticate** (no `gh` CLI, no credential helper configured) — this will block the push step until resolved. Options to offer: install `gh` CLI via winget and have user run `gh auth login` interactively themselves, or user provides a PAT, or user has already created the repo and has another way to auth (SSH key, Windows Credential Manager, etc).
-4. **Final verification pass**: re-run backend startup + health check, confirm `git status` clean, confirm push succeeded, confirm branch/commit match between local and GitHub.
+## Root files — COMPLETE
+Root `README.md` (structure, prerequisites, quick start, verification
+commands) and root `.gitignore` written.
 
 ## Infrastructure (`infrastructure/`) — DONE (authored only, untestable)
-- `infrastructure/docker-compose.yml` (Postgres 16 + Redis 6, matching `backend/.env.example` credentials) and `infrastructure/README.md` written. Docker is not installed on this machine, so this could not be started or tested — documented honestly in the README rather than faked.
+`infrastructure/docker-compose.yml` (Postgres 16 + Redis 7, matching
+`backend/.env.example` credentials) and `infrastructure/README.md` written.
+Docker is not installed on this machine, so this could not be started or
+tested — documented honestly in the README rather than faked.
+
+## Git/GitHub — COMPLETE
+- Repo moved to Desktop; `.git` history preserved through the robocopy move.
+- Root `.gitignore` verified before commit: staged 201 files, confirmed
+  zero `node_modules/`, `dist/`, `.next/`, `.env` (only `.env.example`
+  files), or build output (`.apk`, etc.) got included. `mobile/pubspec.lock`
+  is intentionally committed (standard Flutter practice).
+- Git Credential Manager was already installed and had a cached GitHub
+  credential (`cmdkey /list` showed `git:https://github.com`) — no `gh` CLI
+  or user interaction needed for auth.
+- Remote added: `origin` → `https://github.com/fida2020/XNAKSView.git`
+  (repo name has an extra "S" vs. the project name "XNAKView" — used
+  exactly as the user provided it).
+- `git push -u origin master` succeeded first try, created the branch on
+  GitHub.
+- Verified: `git status` clean, local `HEAD` == `origin/master` (same
+  commit hash), `git branch -vv` shows master tracking origin/master with
+  no ahead/behind.
+
+## Final verification pass — DONE
+- Backend rebuilt and restarted cleanly after the server.ts hardening fix
+  (EADDRINUSE now logs a clear message and exits instead of a confusing
+  double error). `/api/v1/health` returns `503` + `"status":"degraded"`
+  with clear per-dependency error messages when Postgres/Redis are down —
+  exactly the expected behavior given neither is installed.
+- No stray `node.exe` processes left running after any test in this
+  session (checked via `Get-Process node` after each manual server test).
 
 ## Known leftover (harmless, not part of project)
 
