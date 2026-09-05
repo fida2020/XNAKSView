@@ -11,6 +11,13 @@ captured evidence, and fixed a stale doc reference. No product code
 changed; foundation behavior is unchanged, just now fully verified and
 documented.
 
+Second follow-up pass (same day): installed Docker Desktop to unblock real
+Postgres/Redis testing. **Blocked on a pending Windows restart** — see
+"Docker Desktop / infrastructure" section below for exact status and what
+remains. Re-ran every non-Docker-dependent Step 1 check in the meantime
+(backend lint/typecheck/build/prisma-validate, mobile
+doctor/analyze/build-apk, admin typecheck/build) — all still pass.
+
 Project location: `C:\Users\Asia Computer\Desktop\XNAKView`
 GitHub target (per user): `https://github.com/fida2020/XNAKSView.git` (note: repo name has an extra "S" vs project name "XNAKView" — used exactly as given)
 
@@ -20,8 +27,8 @@ GitHub target (per user): `https://github.com/fida2020/XNAKSView.git` (note: rep
 - Flutter 3.44.4, Dart 3.12.2 — installed at `C:\src\flutter`.
 - Android toolchain fully configured: SDK at `C:\Android\Sdk`, licenses accepted, Java from Android Studio JBR. `flutter build apk --debug` succeeds.
 - iOS toolchain: **not available** — this is a Windows machine, no Xcode/macOS. iOS build can only be verified on a Mac. Bundle ID and project config are set up correctly regardless.
-- Docker: **not installed**. PostgreSQL: **not installed** (no service, no CLI). Redis: **not installed** (no service, no CLI). `docker-compose.yml` is written for future use but nothing could be started/tested locally.
-- `gh` CLI: **not installed**. winget is available if needed.
+- Docker Desktop 4.89.0: **installed** 2026-09-05 via `winget install --id Docker.DockerDesktop`. PostgreSQL/Redis: still not started as real services — blocked on a pending Windows restart (see "Docker Desktop / infrastructure" section). `docker-compose.yml` still not run end-to-end.
+- `gh` CLI: **not installed**. winget is available if needed (used for the Docker Desktop install above).
 - No GitHub auth configured yet as of this note.
 
 ## Done so far
@@ -66,11 +73,91 @@ GitHub target (per user): `https://github.com/fida2020/XNAKSView.git` (note: rep
 Root `README.md` (structure, prerequisites, quick start, verification
 commands) and root `.gitignore` written.
 
-## Infrastructure (`infrastructure/`) — DONE (authored only, untestable)
+## Infrastructure (`infrastructure/`) — authored, install in progress, BLOCKED on restart
+
 `infrastructure/docker-compose.yml` (Postgres 16 + Redis 7, matching
-`backend/.env.example` credentials) and `infrastructure/README.md` written.
-Docker is not installed on this machine, so this could not be started or
-tested — documented honestly in the README rather than faked.
+`backend/.env.example` credentials) and `infrastructure/README.md` written
+earlier. This pass attempted to actually install Docker and run it —
+here is exactly what happened and what's still pending, with no steps
+faked or skipped:
+
+### Docker Desktop install — 2026-09-05
+
+1. `winget install --id Docker.DockerDesktop -e --accept-package-agreements
+   --accept-source-agreements --silent` — downloaded (~596MB), verified
+   installer hash, ran the installer (it self-elevates; this machine's UAC
+   is configured to elevate admin-manifested installers without a prompt,
+   confirmed by watching the installer process actually run and finish
+   rather than hang). Result: `Successfully installed`. Confirmed via
+   `winget list --id Docker.DockerDesktop` → `Docker Desktop 4.89.0`.
+2. Launched `Docker Desktop.exe` directly. It reached its Dashboard UI
+   (user signed in). `docker version`, `docker compose version` — CLI
+   client responds fine (client v29.7.2, compose v5.5.0).
+3. `docker version` / `docker ps` against the actual engine fail with:
+   `request returned 500 Internal Server Error for API route ... /v1.55/version`
+   — the Linux engine (WSL2-backed) isn't up.
+4. Investigated: `Get-WindowsOptionalFeature` (run via a self-elevated
+   PowerShell — same silent-elevation behavior as above) showed
+   `Microsoft-Windows-Subsystem-Linux` and `VirtualMachinePlatform` both
+   already `Enabled`. But `wsl --status` returned only wsl.exe's bootstrap
+   stub help text (exit 50) — the actual WSL platform component itself
+   was never installed, only the Windows optional features backing it.
+5. Ran (elevated) `wsl --install --no-distribution --web-download`.
+   Real output: `Downloading: Windows Subsystem for Linux` →
+   `Installing: Windows Subsystem for Linux` → `Windows Subsystem for
+   Linux has been installed.` — but with an explicit warning up front:
+   **"The requested operation is successful. Changes will not be
+   effective until the system is rebooted."**
+6. Confirmed the restart requirement directly: post-install,
+   `wsl --status` now returns *"This application requires the Windows
+   Subsystem for Linux Optional Component. ... The system may need to be
+   restarted so the changes can take effect. Error code:
+   Wsl/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED"*.
+
+**Current state: BLOCKED on a Windows restart the assistant did not take
+(restarting the machine is disruptive/hard-to-reverse and was correctly
+left for the user to do on their own schedule).** Docker Desktop itself is
+fully installed and signed in; the CLI is on PATH; but the container
+engine cannot start until WSL2 finishes initializing post-reboot.
+
+### Exactly what remains after the user restarts Windows
+
+1. `docker version` / `docker compose version` should succeed against the
+   real engine (not just the CLI client) — verify.
+2. `docker compose -f infrastructure/docker-compose.yml up -d` — start
+   Postgres 16 + Redis 7.
+3. `docker ps` — confirm both containers `healthy`/`running`.
+4. `cd backend && npx prisma migrate dev` — run the real migration against
+   live Postgres (schema has only ever been `prisma validate`d, never
+   actually applied to a database).
+5. Start the backend (`node dist/server.js` or `npm run dev`) and hit
+   `GET /api/v1/health` — expect `HTTP 200`, `"status":"healthy"`, both
+   `database.ok` and `cache.ok` true. This has never been observed yet —
+   every prior health check in this project's history was the expected
+   `503 degraded` response with no live DB/Redis.
+6. Re-run the full Step 1 verification suite one more time end-to-end
+   with live infra present.
+
+## Verification suite re-run — 2026-09-05 (pending the restart above)
+
+Everything not dependent on the Docker engine was re-run for real this
+pass, since it was already in flight:
+
+| Check | Result |
+|---|---|
+| Backend lint (`npm run lint`) | PASS |
+| Backend typecheck (`npx tsc --noEmit`) | PASS |
+| Backend build (`npm run build`) | PASS |
+| Prisma schema validate (`npx prisma validate`) | PASS |
+| Backend startup + health endpoint (no live DB) | PASS — `503 degraded`, expected without Postgres/Redis |
+| PostgreSQL connection | **NOT RUN** — blocked on restart |
+| Redis connection | **NOT RUN** — blocked on restart |
+| Prisma migration against live DB | **NOT RUN** — blocked on restart |
+| Flutter doctor | PASS |
+| Flutter analyze | PASS |
+| Flutter build apk --debug | PASS |
+| Admin typecheck (`npx tsc --noEmit`) | PASS |
+| Admin build (`npm run build`) | PASS |
 
 ## Git/GitHub — COMPLETE
 - Repo moved to Desktop; `.git` history preserved through the robocopy move.
