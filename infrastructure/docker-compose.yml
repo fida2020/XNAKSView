@@ -1,0 +1,46 @@
+# Local development infrastructure for XNAKView.
+#
+# Docker was not installed on the machine this was authored on, so this file
+# is written for future use and has NOT been run/tested locally. Once Docker
+# Desktop (or an equivalent) is installed, bring it up with:
+#
+#   docker compose -f infrastructure/docker-compose.yml up -d
+#
+# and point backend/.env at these services (matching backend/.env.example).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: xnakview-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: xnakview
+      POSTGRES_PASSWORD: xnakview_dev_password
+      POSTGRES_DB: xnakview_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - xnakview_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xnakview -d xnakview_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: xnakview-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - xnakview_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  xnakview_postgres_data:
+  xnakview_redis_data:

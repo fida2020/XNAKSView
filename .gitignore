@@ -1,0 +1,62 @@
+# --- Secrets / environment ---
+.env
+.env.*
+!.env.example
+!*/.env.example
+*.pem
+*.key
+*credentials*.json
+
+# --- Node / npm (backend, admin) ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Backend build output ---
+backend/dist/
+
+# --- Next.js (admin) build output ---
+admin/.next/
+admin/out/
+admin/next-env.d.ts
+
+# --- Flutter / Dart (mobile) ---
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/.pub-cache/
+mobile/.pub/
+mobile/build/
+mobile/**/android/.gradle/
+mobile/**/android/local.properties
+mobile/**/android/**/GeneratedPluginRegistrant.java
+mobile/**/ios/Flutter/Generated.xcconfig
+mobile/**/ios/Flutter/flutter_export_environment.sh
+mobile/**/ios/Pods/
+mobile/**/ios/.symlinks/
+mobile/**/*.g.dart
+mobile/**/*.freezed.dart
+
+# --- Local database / cache files ---
+*.sqlite
+*.sqlite3
+*.rdb
+*.dump
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Coverage / test artifacts ---
+coverage/
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.iml
+
+# --- OS / system files ---
+.DS_Store
+Thumbs.db
+desktop.ini

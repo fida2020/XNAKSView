@@ -1,0 +1,140 @@
+// XNAKView — Foundation schema (Step 1)
+// Only identity/foundation models are defined here. Future domains (Video, LIVE,
+// Match, Message, Wallet, Coins, Gifts, Withdrawals, Reports, Moderation, Levels,
+// Teams, ...) will be added in later phases as their own models, relating back to
+// User via userId, without needing to change what's defined here.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  BANNED
+  DELETED
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum VerificationType {
+  EMAIL
+  PHONE
+  IDENTITY_DOCUMENT
+  AGE
+}
+
+enum DevicePlatform {
+  IOS
+  ANDROID
+  WEB
+  DESKTOP
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String?  @unique
+  phone        String?  @unique
+  passwordHash String
+
+  dateOfBirth DateTime?
+  ageVerified Boolean   @default(false)
+
+  status UserStatus @default(PENDING_VERIFICATION)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile        Profile?
+  verifications  Verification[]
+  devices        Device[]
+  sessions       Session[]
+
+  @@index([status])
+  @@map("users")
+}
+
+model Profile {
+  id String @id @default(uuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  username    String  @unique
+  displayName String?
+  bio         String?
+  avatarUrl   String?
+
+  country String?
+  city    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([username])
+  @@map("profiles")
+}
+
+model Verification {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  status           VerificationStatus @default(PENDING)
+  verificationType VerificationType
+
+  verifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, verificationType])
+  @@index([status])
+  @@map("verifications")
+}
+
+model Device {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deviceIdentifier String
+  platform         DevicePlatform
+
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, deviceIdentifier])
+  @@index([deviceIdentifier])
+  @@map("devices")
+}
+
+model Session {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  refreshTokenHash String @unique
+
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
