@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
@@ -55,7 +56,15 @@ function LoginForm() {
         className="w-full max-w-sm space-y-4 rounded-lg border border-black/10 p-8 dark:border-white/10"
       >
         <div className="text-center">
-          <h1 className="text-xl font-semibold">XNAKView Admin</h1>
+          <Image
+            src="/branding/xnakview_logo.png"
+            alt="XNAKView"
+            width={64}
+            height={64}
+            className="mx-auto rounded-xl"
+            priority
+          />
+          <h1 className="mt-3 text-xl font-semibold">XNAKView Admin</h1>
           <p className="mt-1 text-sm text-black/60 dark:text-white/60">Sign in to continue</p>
         </div>
 
