@@ -7,11 +7,17 @@ import '../../features/auth/presentation/auth_controller.dart';
 import '../../features/auth/presentation/register_screen.dart';
 import '../../features/auth/presentation/sign_in_screen.dart';
 import '../../features/live/presentation/live_discovery_screen.dart';
+import '../../features/messaging/presentation/call_history_screen.dart';
+import '../../features/messaging/presentation/call_screen.dart';
+import '../../features/messaging/presentation/chat_screen.dart';
+import '../../features/messaging/presentation/incoming_call_screen.dart';
+import '../../features/messaging/presentation/inbox_screen.dart';
 import '../../features/profile/presentation/profile_setup_screen.dart';
 import '../../features/splash/presentation/splash_screen.dart';
 import '../../features/video/presentation/creator_profile_screen.dart';
 import '../../features/video/presentation/feed_screen.dart';
 import '../../features/video/presentation/upload_video_screen.dart';
+import 'navigator_key.dart';
 
 abstract class AppRoutes {
   static const splash = '/splash';
@@ -22,12 +28,37 @@ abstract class AppRoutes {
   static const uploadVideo = '/upload';
   static const creatorProfile = '/profile';
   static const live = '/live';
+  static const inbox = '/inbox';
+  static const chat = '/chat';
+  static const callHistory = '/calls';
+  static const incomingCall = '/incoming-call';
+  static const activeCall = '/active-call';
 }
 
 extension AppNavigation on BuildContext {
   void pushRegister() => push(AppRoutes.register);
   void pushUploadVideo() => push(AppRoutes.uploadVideo);
   void pushLiveDiscovery() => push(AppRoutes.live);
+  void pushInbox() => push(AppRoutes.inbox);
+  void pushChat(String conversationId) => push('${AppRoutes.chat}/$conversationId');
+  void pushCallHistory() => push(AppRoutes.callHistory);
+
+  void pushActiveCall({
+    required String callId,
+    required String token,
+    required String wsUrl,
+    required bool isVideo,
+    String? otherUserName,
+  }) =>
+      push(
+        '${AppRoutes.activeCall}/$callId',
+        extra: {'token': token, 'wsUrl': wsUrl, 'isVideo': isVideo, 'otherUserName': otherUserName},
+      );
+
+  void pushIncomingCall({required String callId, String? callerName, required String callType}) => push(
+        '${AppRoutes.incomingCall}/$callId',
+        extra: {'callerName': callerName, 'callType': callType},
+      );
 
   /// Omit [userId] to view the signed-in user's own profile.
   void pushCreatorProfile({String? userId}) =>
@@ -36,6 +67,7 @@ extension AppNavigation on BuildContext {
 
 final appRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
+    navigatorKey: navigatorKey,
     initialLocation: AppRoutes.splash,
     refreshListenable: _AuthStatusListenable(ref),
     redirect: (context, state) {
@@ -78,6 +110,33 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => CreatorProfileScreen(userId: state.pathParameters['userId']),
       ),
       GoRoute(path: AppRoutes.live, builder: (context, state) => const LiveDiscoveryScreen()),
+      GoRoute(path: AppRoutes.inbox, builder: (context, state) => const InboxScreen()),
+      GoRoute(
+        path: '${AppRoutes.chat}/:conversationId',
+        builder: (context, state) => ChatScreen(conversationId: state.pathParameters['conversationId']!),
+      ),
+      GoRoute(path: AppRoutes.callHistory, builder: (context, state) => const CallHistoryScreen()),
+      GoRoute(
+        path: '${AppRoutes.incomingCall}/:callId',
+        builder: (context, state) => IncomingCallScreen(
+          callId: state.pathParameters['callId']!,
+          callerName: (state.extra as Map?)?['callerName'] as String?,
+          callType: (state.extra as Map?)?['callType'] as String? ?? 'VOICE',
+        ),
+      ),
+      GoRoute(
+        path: '${AppRoutes.activeCall}/:callId',
+        builder: (context, state) {
+          final extra = state.extra as Map;
+          return CallScreen(
+            callId: state.pathParameters['callId']!,
+            token: extra['token'] as String,
+            wsUrl: extra['wsUrl'] as String,
+            isVideo: extra['isVideo'] as bool,
+            otherUserName: extra['otherUserName'] as String?,
+          );
+        },
+      ),
     ],
   );
 });

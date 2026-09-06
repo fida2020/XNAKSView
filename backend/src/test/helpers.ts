@@ -1,11 +1,35 @@
+import { createServer } from 'http';
 import path from 'path';
 
 import request from 'supertest';
 
 import { createApp } from '@/app';
 import { prisma } from '@/lib/prisma';
+import { initRealtime } from '@/lib/realtime';
 
 export const app = createApp();
+
+/**
+ * A real, listening HTTP server with the real-time gateway attached — for
+ * tests that need an actual socket (e.g. `socket.io-client` connecting over
+ * a real port), as opposed to `supertest(app)`'s ephemeral per-request
+ * server, which never gives Socket.IO's upgrade handshake anywhere to land.
+ * Call once per test file (e.g. in `beforeAll`), not per test.
+ */
+export function startRealtimeTestServer(): Promise<{ url: string; close: () => Promise<void> }> {
+  const httpServer = createServer(app);
+  initRealtime(httpServer);
+  return new Promise((resolve) => {
+    httpServer.listen(0, () => {
+      const address = httpServer.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      resolve({
+        url: `http://127.0.0.1:${port}`,
+        close: () => new Promise((res) => httpServer.close(() => res())),
+      });
+    });
+  });
+}
 
 export const SAMPLE_VIDEO_PATH = path.join(__dirname, 'fixtures', 'sample.mp4');
 export const NOT_A_VIDEO_PATH = path.join(__dirname, 'fixtures', 'not-a-video.txt');

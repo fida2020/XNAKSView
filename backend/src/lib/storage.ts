@@ -142,6 +142,10 @@ export function liveThumbnailKey(liveSessionId: string, extension: string): stri
   return `live/${liveSessionId}/thumbnail${extension}`;
 }
 
+export function voiceMessageKey(messageId: string, extension: string): string {
+  return `messages/${messageId}/voice${extension}`;
+}
+
 export function videoThumbnailKey(videoId: string): string {
   return `videos/${videoId}/thumbnail.jpg`;
 }

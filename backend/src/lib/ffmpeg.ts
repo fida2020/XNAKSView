@@ -89,6 +89,42 @@ export async function probeVideo(filePath: string): Promise<VideoProbeResult> {
   };
 }
 
+export interface AudioProbeResult {
+  durationMs: number;
+}
+
+/** Same real-decode validation `probeVideo` does, scoped to audio — confirms an actual audio stream exists and extracts its real duration (never the client's claimed value). */
+export async function probeAudio(filePath: string): Promise<AudioProbeResult> {
+  const { stdout } = await runCommand(env.FFPROBE_PATH, [
+    '-v',
+    'error',
+    '-print_format',
+    'json',
+    '-show_format',
+    '-show_streams',
+    filePath,
+  ]);
+
+  let data: FfprobeOutput;
+  try {
+    data = JSON.parse(stdout) as FfprobeOutput;
+  } catch {
+    throw new Error('ffprobe returned unparseable output — file is likely not a valid media file');
+  }
+
+  const audioStream = (data.streams ?? []).find((stream) => stream.codec_type === 'audio');
+  if (!audioStream) {
+    throw new Error('No audio stream found in uploaded file');
+  }
+
+  const durationSeconds = parseFloat(data.format?.duration ?? audioStream.duration ?? '0');
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new Error('Could not determine audio duration');
+  }
+
+  return { durationMs: Math.round(durationSeconds * 1000) };
+}
+
 /** Captures a single real frame from the video — never a placeholder image. */
 export async function generateThumbnail(inputPath: string, outputPath: string, atSeconds: number): Promise<void> {
   await runCommand(env.FFMPEG_PATH, [

@@ -12,6 +12,7 @@ import { validate } from '@/middleware/validate';
 import {
   adminCreateBlockedWordSchema,
   adminEnforceAccountStatusSchema,
+  adminListConversationsQuerySchema,
   adminListLiveQuerySchema,
   adminListReportsQuerySchema,
   adminListVideosQuerySchema,
@@ -368,6 +369,210 @@ adminRouter.post(
         statusUpdatedAt: updated.statusUpdatedAt,
         statusUpdatedById: updated.statusUpdatedById,
       });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// -----------------------------------------------------------------------
+// Chat + calls inspection (Step 5) — same read-only-unless-noted convention
+// as the LIVE section above. Conversation *content* (message text/voice) is
+// intentionally NOT exposed here beyond what a report already surfaces —
+// inspecting a report shows the reported message; browsing a conversation's
+// full history is not a Step 5 admin capability.
+// -----------------------------------------------------------------------
+
+adminRouter.get(
+  '/admin/conversations',
+  validate({ query: adminListConversationsQuerySchema }),
+  async (req, res, next) => {
+    try {
+      const { cursor, limit, status } = req.query as unknown as { cursor?: string; limit: number; status?: string };
+      const decoded = cursor ? decodeCursor(cursor) : null;
+      if (cursor && !decoded) {
+        throw new AppError('BAD_REQUEST', 'Invalid cursor');
+      }
+
+      const conversations = await prisma.conversation.findMany({
+        where: {
+          ...(status ? { status: status as never } : {}),
+          ...(decoded
+            ? {
+                OR: [
+                  { createdAt: { lt: new Date(decoded.createdAt) } },
+                  { createdAt: new Date(decoded.createdAt), id: { lt: decoded.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        include: {
+          participantOne: { select: { id: true, email: true, phone: true } },
+          participantTwo: { select: { id: true, email: true, phone: true } },
+        },
+      });
+
+      const hasMore = conversations.length > limit;
+      const page = hasMore ? conversations.slice(0, limit) : conversations;
+      const last = page[page.length - 1];
+      const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt.toISOString(), id: last.id }) : null;
+
+      res.status(200).json({
+        conversations: page.map((c) => ({
+          id: c.id,
+          status: c.status,
+          initiatedById: c.initiatedById,
+          lastMessageAt: c.lastMessageAt,
+          createdAt: c.createdAt,
+          participants: [
+            { id: c.participantOne.id, email: c.participantOne.email, phone: c.participantOne.phone },
+            { id: c.participantTwo.id, email: c.participantTwo.email, phone: c.participantTwo.phone },
+          ],
+        })),
+        nextCursor,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminRouter.get('/admin/conversations/:id', async (req, res, next) => {
+  try {
+    const conversation = await prisma.conversation.findUnique({
+      where: { id: req.params.id! },
+      include: {
+        participantOne: { select: { id: true, email: true, phone: true } },
+        participantTwo: { select: { id: true, email: true, phone: true } },
+        reports: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+    if (!conversation) {
+      throw new AppError('NOT_FOUND', 'Conversation not found');
+    }
+
+    res.status(200).json({
+      id: conversation.id,
+      status: conversation.status,
+      initiatedById: conversation.initiatedById,
+      lastMessageAt: conversation.lastMessageAt,
+      createdAt: conversation.createdAt,
+      participants: [
+        { id: conversation.participantOne.id, email: conversation.participantOne.email, phone: conversation.participantOne.phone },
+        { id: conversation.participantTwo.id, email: conversation.participantTwo.email, phone: conversation.participantTwo.phone },
+      ],
+      reports: conversation.reports,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+function decodeReportCursor(cursor: string | undefined) {
+  const decoded = cursor ? decodeCursor(cursor) : null;
+  if (cursor && !decoded) {
+    throw new AppError('BAD_REQUEST', 'Invalid cursor');
+  }
+  return decoded;
+}
+
+function paginateReports<T extends { id: string; createdAt: Date }>(items: T[], limit: number) {
+  const hasMore = items.length > limit;
+  const page = hasMore ? items.slice(0, limit) : items;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt.toISOString(), id: last.id }) : null;
+  return { page, nextCursor };
+}
+
+adminRouter.get(
+  '/admin/message-reports',
+  validate({ query: adminListReportsQuerySchema }),
+  async (req, res, next) => {
+    try {
+      const { cursor, limit, status } = req.query as unknown as { cursor?: string; limit: number; status?: string };
+      const decoded = decodeReportCursor(cursor);
+
+      const reports = await prisma.messageReport.findMany({
+        where: {
+          ...(status ? { status: status as never } : {}),
+          ...(decoded
+            ? { OR: [{ createdAt: { lt: new Date(decoded.createdAt) } }, { createdAt: new Date(decoded.createdAt), id: { lt: decoded.id } }] }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        include: {
+          message: { select: { id: true, conversationId: true, senderId: true, type: true, text: true, deletedAt: true } },
+          reporter: { select: { id: true, email: true, phone: true } },
+        },
+      });
+
+      const { page, nextCursor } = paginateReports(reports, limit);
+      res.status(200).json({ reports: page, nextCursor });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminRouter.get(
+  '/admin/conversation-reports',
+  validate({ query: adminListReportsQuerySchema }),
+  async (req, res, next) => {
+    try {
+      const { cursor, limit, status } = req.query as unknown as { cursor?: string; limit: number; status?: string };
+      const decoded = decodeReportCursor(cursor);
+
+      const reports = await prisma.conversationReport.findMany({
+        where: {
+          ...(status ? { status: status as never } : {}),
+          ...(decoded
+            ? { OR: [{ createdAt: { lt: new Date(decoded.createdAt) } }, { createdAt: new Date(decoded.createdAt), id: { lt: decoded.id } }] }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        include: {
+          conversation: { select: { id: true, status: true, participantOneId: true, participantTwoId: true } },
+          reporter: { select: { id: true, email: true, phone: true } },
+        },
+      });
+
+      const { page, nextCursor } = paginateReports(reports, limit);
+      res.status(200).json({ reports: page, nextCursor });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminRouter.get(
+  '/admin/call-reports',
+  validate({ query: adminListReportsQuerySchema }),
+  async (req, res, next) => {
+    try {
+      const { cursor, limit, status } = req.query as unknown as { cursor?: string; limit: number; status?: string };
+      const decoded = decodeReportCursor(cursor);
+
+      const reports = await prisma.callReport.findMany({
+        where: {
+          ...(status ? { status: status as never } : {}),
+          ...(decoded
+            ? { OR: [{ createdAt: { lt: new Date(decoded.createdAt) } }, { createdAt: new Date(decoded.createdAt), id: { lt: decoded.id } }] }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        include: {
+          call: { select: { id: true, callerId: true, calleeId: true, type: true, status: true } },
+          reporter: { select: { id: true, email: true, phone: true } },
+        },
+      });
+
+      const { page, nextCursor } = paginateReports(reports, limit);
+      res.status(200).json({ reports: page, nextCursor });
     } catch (error) {
       next(error);
     }

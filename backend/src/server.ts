@@ -1,10 +1,11 @@
-import type { Server } from 'http';
+import { createServer, type Server } from 'http';
 
 import { createApp } from '@/app';
 import { env } from '@/config/env';
 import { logger } from '@/lib/logger';
 import { connectDatabase, disconnectDatabase } from '@/lib/prisma';
 import { connectRedis, disconnectRedis } from '@/lib/redis';
+import { initRealtime } from '@/lib/realtime';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -22,9 +23,13 @@ async function main(): Promise<void> {
   });
 
   const app = createApp();
-  const server: Server = app.listen(env.PORT, () => {
+  const httpServer = createServer(app);
+  initRealtime(httpServer);
+
+  const server: Server = httpServer.listen(env.PORT, () => {
     logger.info(`XNAKView backend listening on port ${env.PORT} (${env.NODE_ENV})`);
     logger.info(`API base path: ${env.API_PREFIX}`);
+    logger.info('Realtime (Socket.IO) gateway attached to the same HTTP server');
   });
 
   let listening = false;

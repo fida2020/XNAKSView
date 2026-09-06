@@ -26,3 +26,9 @@ export const adminEnforceAccountStatusSchema = z.object({
   status: z.enum(['ACTIVE', 'SUSPENDED', 'BANNED']),
   reason: z.string().trim().max(500).optional(),
 });
+
+export const adminListConversationsQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: z.enum(['PENDING', 'ACCEPTED']).optional(),
+});

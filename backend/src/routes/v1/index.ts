@@ -11,6 +11,11 @@ import { liveEventsRouter } from '@/routes/v1/liveEvents';
 import { liveGuestsRouter } from '@/routes/v1/liveGuests';
 import { liveMatchesRouter } from '@/routes/v1/liveMatches';
 import { liveRouter } from '@/routes/v1/live';
+import { blocksRouter } from '@/routes/v1/blocks';
+import { messagingSettingsRouter } from '@/routes/v1/messagingSettings';
+import { conversationsRouter } from '@/routes/v1/conversations';
+import { messagesRouter } from '@/routes/v1/messages';
+import { callsRouter } from '@/routes/v1/calls';
 import { adminRouter } from '@/routes/v1/admin';
 
 export const v1Router = Router();
@@ -29,4 +34,12 @@ v1Router.use(liveEventsRouter);
 v1Router.use(liveGuestsRouter);
 v1Router.use(liveMatchesRouter);
 v1Router.use(liveRouter);
+// Step 5 chat + calls. `/me/...` and `/users/:id/...` (block/presence) paths
+// are deliberately shaped to never collide with followRouter's `/users/:id`
+// regardless of mount order — see routes/v1/blocks.ts.
+v1Router.use(blocksRouter);
+v1Router.use(messagingSettingsRouter);
+v1Router.use(conversationsRouter);
+v1Router.use(messagesRouter);
+v1Router.use(callsRouter);
 v1Router.use(adminRouter);

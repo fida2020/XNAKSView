@@ -68,6 +68,12 @@ model User {
   statusUpdatedAt   DateTime?
   statusUpdatedById String?
 
+  // Presence (Step 5). This is a durable fallback ("last seen X ago"), not
+  // the live "online right now" signal — that lives in Redis (see
+  // lib/realtime.ts) because it changes far too often to be worth a DB
+  // write per heartbeat. Updated on socket connect/disconnect.
+  lastActiveAt DateTime?
+
   // Denormalized so profile/feed reads never need a COUNT() query.
   // Maintained transactionally alongside the Follow rows that back them.
   followerCount  Int @default(0)
@@ -104,6 +110,21 @@ model User {
   liveChatMessageReports   LiveChatMessageReport[]
   creatorSubscriptions     LiveSubscription[]      @relation("CreatorSubscriptions")
   fanSubscriptions         LiveSubscription[]      @relation("FanSubscriptions")
+
+  conversationsAsOne  Conversation[]            @relation("ConversationParticipantOne")
+  conversationsAsTwo  Conversation[]            @relation("ConversationParticipantTwo")
+  conversationsInited Conversation[]            @relation("ConversationInitiator")
+  conversationMembers ConversationParticipant[]
+  messages            Message[]
+  messageReceipts     MessageReceipt[]
+  messageReports      MessageReport[]
+  conversationReports ConversationReport[]
+  blocksMade          UserBlock[]               @relation("BlockedByMe")
+  blocksReceived      UserBlock[]               @relation("BlockedAgainstMe")
+  messagingSettings   MessagingPrivacySettings?
+  callsMade           Call[]                    @relation("CallsAsCaller")
+  callsReceived       Call[]                    @relation("CallsAsCallee")
+  callReports         CallReport[]
 
   @@index([status])
   @@map("users")
@@ -755,4 +776,295 @@ model LiveSubscription {
   @@unique([creatorId, fanId])
   @@index([creatorId])
   @@map("live_subscriptions")
+}
+
+// ---------------------------------------------------------------------------
+// Chat + Voice/Video Calls (Step 5)
+// ---------------------------------------------------------------------------
+
+// A conversation request the recipient hasn't accepted yet (their privacy
+// setting didn't allow the sender through automatically) vs. a normal,
+// mutually-visible conversation. See lib/messagingAccess.ts for the
+// eligibility logic that decides which one a new conversation starts as.
+enum ConversationRequestStatus {
+  PENDING
+  ACCEPTED
+}
+
+// One row per ordered pair of users — `participantOneId`/`participantTwoId`
+// are always stored with the lexicographically smaller user id first
+// (normalized by lib/messagingAccess.ts), which is what makes "find or
+// create the 1:1 conversation between these two users" a single unique-index
+// lookup instead of an OR-of-two-orderings query.
+model Conversation {
+  id String @id @default(uuid())
+
+  participantOneId String
+  participantOne   User   @relation("ConversationParticipantOne", fields: [participantOneId], references: [id], onDelete: Cascade)
+  participantTwoId String
+  participantTwo   User   @relation("ConversationParticipantTwo", fields: [participantTwoId], references: [id], onDelete: Cascade)
+
+  initiatedById String
+  initiatedBy   User   @relation("ConversationInitiator", fields: [initiatedById], references: [id], onDelete: Cascade)
+
+  status ConversationRequestStatus @default(ACCEPTED)
+
+  // Denormalized pointers to the latest message, maintained transactionally
+  // whenever a message is sent — lets the conversation list sort/paginate by
+  // recency without a correlated MAX(createdAt) subquery per conversation.
+  lastMessageId String?   @unique
+  lastMessage   Message?  @relation("ConversationLastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
+  lastMessageAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  participants ConversationParticipant[]
+  messages     Message[]                 @relation("ConversationMessages")
+  reports      ConversationReport[]
+
+  @@unique([participantOneId, participantTwoId])
+  @@index([participantOneId, status, lastMessageAt])
+  @@index([participantTwoId, status, lastMessageAt])
+  @@map("conversations")
+}
+
+// Per-user mutable state for a conversation (unread count, mute, pin, read
+// cursor) — kept off `Conversation` itself because it differs per side (my
+// unread count is not your unread count).
+model ConversationParticipant {
+  id String @id @default(uuid())
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  unreadCount       Int       @default(0)
+  lastReadAt        DateTime?
+  lastReadMessageId String?
+
+  muted    Boolean   @default(false)
+  pinned   Boolean   @default(false)
+  pinnedAt DateTime?
+
+  joinedAt DateTime @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([userId, pinned])
+  @@map("conversation_participants")
+}
+
+enum MessageType {
+  TEXT
+  VOICE
+}
+
+model Message {
+  id String @id @default(uuid())
+
+  conversationId String
+  conversation   Conversation @relation("ConversationMessages", fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  type MessageType @default(TEXT)
+  text String?
+
+  // Voice message fields (see lib/voiceValidation.ts) — populated only when
+  // type is VOICE. Real duration comes from ffprobe on the uploaded file,
+  // never the client's claimed value.
+  voiceKey        String?
+  voiceDurationMs Int?
+  voiceMimeType   String?
+
+  // Client-generated idempotency key: retrying the same logical send (e.g.
+  // after a dropped response on a flaky connection) with the same key
+  // returns the already-created message instead of creating a duplicate —
+  // enforced by the database, not just application logic.
+  clientMessageId String
+
+  // Unsend/delete: a tombstone, not a hard delete — the row (and its place
+  // in message ordering) stays; readers see "message deleted" instead of
+  // whatever it said. See routes/v1/messages.ts for the policy (sender-only,
+  // time-limited).
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  receipts      MessageReceipt[]
+  reports       MessageReport[]
+  asLastMessage Conversation?    @relation("ConversationLastMessage")
+
+  @@unique([conversationId, senderId, clientMessageId])
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@map("messages")
+}
+
+// Delivery/read tracking per recipient. In a 1:1 conversation there is only
+// ever one recipient row per message, but keeping it per-user (rather than a
+// single status enum on Message) means group messaging is a later step's
+// schema no-op, not a rewrite.
+model MessageReceipt {
+  id String @id @default(uuid())
+
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deliveredAt DateTime?
+  readAt      DateTime?
+
+  @@unique([messageId, userId])
+  @@index([userId])
+  @@map("message_receipts")
+}
+
+model MessageReport {
+  id String @id @default(uuid())
+
+  messageId   String
+  message     Message           @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  reporterId  String
+  reporter    User              @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason      VideoReportReason
+  description String?
+  status      VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, reporterId])
+  @@index([messageId])
+  @@index([status])
+  @@map("message_reports")
+}
+
+model ConversationReport {
+  id String @id @default(uuid())
+
+  conversationId String
+  conversation   Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  reporterId     String
+  reporter       User              @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason         VideoReportReason
+  description    String?
+  status         VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([conversationId, reporterId])
+  @@index([conversationId])
+  @@index([status])
+  @@map("conversation_reports")
+}
+
+// Blocking is directional (A blocking B doesn't imply B blocked A), but
+// lib/messagingAccess.ts treats a block in *either* direction as mutual for
+// messaging/call purposes — the simplest rule that matches "a blocked
+// relationship should stop contact both ways," and avoids the awkward case
+// of someone still being able to call/message a person they themselves blocked.
+model UserBlock {
+  id String @id @default(uuid())
+
+  blockerId String
+  blocker   User   @relation("BlockedByMe", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String
+  blocked   User   @relation("BlockedAgainstMe", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+  @@map("user_blocks")
+}
+
+// "Who can message me" — checked when a NEW conversation is created, not on
+// every message (an existing ACCEPTED conversation stays usable even if the
+// owner tightens this setting later; it only gates new contact, matching the
+// reference product's behavior).
+enum MessagePermission {
+  EVERYONE
+  MUTUAL_FOLLOWERS
+  NO_ONE
+}
+
+model MessagingPrivacySettings {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  whoCanMessage      MessagePermission @default(MUTUAL_FOLLOWERS)
+  showActivityStatus Boolean           @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("messaging_privacy_settings")
+}
+
+enum CallType {
+  VOICE
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING
+  ACCEPTED
+  DECLINED
+  BUSY
+  MISSED
+  ENDED
+  CANCELLED
+  FAILED
+}
+
+model Call {
+  id String @id @default(uuid())
+
+  callerId String
+  caller   User   @relation("CallsAsCaller", fields: [callerId], references: [id], onDelete: Cascade)
+  calleeId String
+  callee   User   @relation("CallsAsCallee", fields: [calleeId], references: [id], onDelete: Cascade)
+
+  type   CallType
+  status CallStatus @default(RINGING)
+
+  // The LiveKit room backing this call's real WebRTC media — same
+  // LiveStreamingProvider abstraction Step 4 LIVE uses (lib/liveStreaming.ts).
+  roomName String
+
+  startedAt       DateTime  @default(now())
+  answeredAt      DateTime?
+  endedAt         DateTime?
+  durationSeconds Int?
+  failureReason   String?
+
+  reports CallReport[]
+
+  @@index([callerId, startedAt])
+  @@index([calleeId, startedAt])
+  @@index([status])
+  @@map("calls")
+}
+
+model CallReport {
+  id String @id @default(uuid())
+
+  callId      String
+  call        Call              @relation(fields: [callId], references: [id], onDelete: Cascade)
+  reporterId  String
+  reporter    User              @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason      VideoReportReason
+  description String?
+  status      VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([callId, reporterId])
+  @@index([callId])
+  @@index([status])
+  @@map("call_reports")
 }

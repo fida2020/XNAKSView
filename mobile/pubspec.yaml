@@ -62,6 +62,14 @@ dependencies:
   # Runtime camera/microphone permission requests for going LIVE
   permission_handler: ^11.3.1
 
+  # Chat + calls (Step 5): real-time transport client matching the backend's
+  # Socket.IO gateway (lib/realtime.ts) — see features/messaging/data/realtime_client.dart.
+  socket_io_client: ^2.0.3+1
+
+  # Voice message recording and playback
+  record: ^5.2.1
+  just_audio: ^0.9.42
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

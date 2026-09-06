@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
+    "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^3.0.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
@@ -35,6 +36,7 @@
     "pino": "^9.4.0",
     "pino-http": "^10.3.0",
     "rate-limit-redis": "^4.2.0",
+    "socket.io": "^4.8.3",
     "uuid": "^9.0.1",
     "zod": "^3.23.8"
   },
@@ -54,6 +56,7 @@
     "pino-pretty": "^11.2.2",
     "prettier": "^3.3.3",
     "prisma": "^5.20.0",
+    "socket.io-client": "^4.8.3",
     "supertest": "^7.2.2",
     "tsc-alias": "^1.8.10",
     "tsx": "^4.19.1",

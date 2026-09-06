@@ -2,12 +2,12 @@
 
 **Company:** BALOCH SAHAB TECHNOLOGIES (SMC-PRIVATE) LIMITED
 **Domain:** balochsahab.com
-**Status:** Step 4 — LIVE Streaming
+**Status:** Step 5 — Chat + Voice/Video Calls
 
 This document describes the architecture established in Step 1 and
-extended in Steps 2, 3, and 4. It will be extended further, not rewritten,
-as later phases (see `ROADMAP.md`) add real functionality on top of this
-foundation.
+extended in Steps 2, 3, 4, and 5. It will be extended further, not
+rewritten, as later phases (see `ROADMAP.md`) add real functionality on top
+of this foundation.
 
 ## 1. Overall architecture
 
@@ -396,7 +396,83 @@ table were deliberately *not* created.
   own data-track messaging is a natural upgrade path without changing the
   chat data model.
 
-## 8. Security approach
+## 8. Chat + calls architecture (Step 5)
+
+- **Direct messaging is a normalized-pair conversation, not a message log
+  with implicit grouping.** `Conversation.participantOneId`/
+  `participantTwoId` are always stored smaller-id-first
+  (`lib/messagingAccess.ts`'s `normalizePair`), so "find or create the 1:1
+  conversation between these two users" is one unique-index lookup, not an
+  OR-of-two-orderings query. Per-user mutable state (unread count, mute,
+  pin, read cursor) lives on a separate `ConversationParticipant` row per
+  side — deliberately, so "I muted this" is never visible to the other
+  participant, and so the schema already fits a future group conversation
+  without a rewrite (more `ConversationParticipant` rows, not a new shape).
+- **Message sending is idempotent by database constraint, not
+  by convention.** `Message`'s `[conversationId, senderId, clientMessageId]`
+  unique index means a client retrying a send after a dropped response
+  (a flaky connection, an app backgrounded mid-request) gets back the
+  message that was actually created, not a duplicate — the same posture
+  Step 4 gave LIVE chat's guest-slot/match-creation flows.
+- **The real-time gateway is additive, never the source of truth.**
+  `lib/realtime.ts` wraps Socket.IO (+ a Redis adapter for cross-instance
+  pub/sub) behind the same small-interface pattern
+  `LiveStreamingProvider` established in Step 4 — `emitToUser`,
+  `emitToConversation`, `isOnline`. Messages and calls are always written to
+  Postgres first by a REST handler; the gateway is only ever told
+  afterwards. A duplicate or delayed socket event therefore can't create
+  duplicate data — a client reconciles by id, never by trusting the event
+  itself as authoritative. Authentication on the socket handshake reuses
+  `middleware/auth.ts`'s `resolveAuth()` (the same function `requireAuth`
+  calls), so a suspended/banned account is rejected identically on both
+  transports.
+- **Presence lives in Redis, not Postgres.** A per-user key with a 75-second
+  TTL (refreshed every 25s while connected) is "online now"; `User.lastActiveAt`
+  (a real column) is the durable "last seen" fallback, written on
+  disconnect. Presence is only ever broadcast to users who share an
+  *accepted* conversation with the person coming online/offline, and only
+  if that person's `MessagingPrivacySettings.showActivityStatus` allows it.
+- **Message-request privacy is checked once, at conversation creation, not
+  per-message.** `MessagingPrivacySettings.whoCanMessage` (`EVERYONE` /
+  `MUTUAL_FOLLOWERS` / `NO_ONE`) decides whether a new conversation starts
+  `ACCEPTED` or `PENDING` (a "message request," matching the reference
+  product's behavior for non-mutual senders); once a conversation exists,
+  tightening the setting later doesn't retroactively lock out an existing
+  thread. Blocking is checked on every send, not just at creation, and is
+  treated as mutual for messaging/call purposes regardless of which
+  direction the block row was created in.
+- **Calls reuse Step 4's LiveKit provider — a call is just a
+  two-participant room.** `routes/v1/calls.ts` calls the same
+  `LiveStreamingProvider` interface LIVE streaming uses (`createRoom`,
+  `deleteRoom`, `generateToken`) rather than a second WebRTC stack. Call
+  lifecycle (`RINGING → ACCEPTED/DECLINED/CANCELLED/MISSED/BUSY → ENDED`)
+  and busy-detection are computed inside a `Serializable` transaction — the
+  same fix Step 4 applied to guest-slot acceptance — so two simultaneous
+  initiations can't both succeed and leave a caller or callee in two calls
+  at once.
+- **Voice messages get the same "never trust the client" validation as
+  video uploads.** `lib/voiceValidation.ts` checks real magic bytes and
+  runs the file through `ffprobe` (extending `lib/ffmpeg.ts`) to confirm an
+  actual audio stream and its real duration before accepting it — the
+  client's claimed duration is never used for the stored `voiceDurationMs`.
+- **Notifications are behind a one-method interface
+  (`lib/notifications.ts`'s `NotificationDispatcher`), not hardcoded to a
+  provider.** Its only implementation today forwards onto the realtime
+  gateway, which reaches a connected client only — there is no
+  background/killed-app push (FCM/APNs) yet. Adding one later is a second
+  implementation of the same interface, not a change to
+  `routes/v1/messages.ts` or `routes/v1/calls.ts`.
+- **What Step 5 implements vs. defers** (see `docs/STEP5_PROGRESS.md` §7 for
+  the full list): implemented — 1:1 messaging with requests/mute/pin/
+  block/report, voice messages, real-time delivery/typing/presence/read
+  receipts, 1:1 voice+video calls with full lifecycle and history, admin
+  inspection. Deferred — group messaging, push notifications, a generic
+  person-level report model (satisfied here by conversation reports +
+  blocking), and — unchanged from Step 4's position — full AI
+  abuse-severity classification (the manual `enforceAccountStatus()` path
+  from Step 4 is what a message/conversation/call report feeds into today).
+
+## 9. Security approach
 
 - **Password hashing**: `bcryptjs`, 12 rounds — `passwordHash` is the only
   form a password ever takes at rest; plaintext is never logged or returned
@@ -434,14 +510,14 @@ table were deliberately *not* created.
   credentials that match `.env.example`, not anything resembling a
   production secret.
 
-## 9. API versioning
+## 10. API versioning
 
 All routes are mounted under `/api/v1`. A future breaking change gets its
 own `/api/v2` mounted alongside `v1` rather than mutating `v1` in place,
 so existing mobile app installs that haven't updated yet keep working
 against the version they were built against.
 
-## 10. Mobile architecture (Android + iOS)
+## 11. Mobile architecture (Android + iOS)
 
 Single Flutter codebase, both platforms built from the same `lib/` source
 — no platform-forked product logic. Clean-architecture-flavored layering:
@@ -482,7 +558,7 @@ inside its implementation or by the underlying plugin — not
 `Platform.isAndroid`/`Platform.isIOS` branches scattered through feature
 code.
 
-## 11. Admin architecture
+## 12. Admin architecture
 
 Next.js (App Router). `proxy.ts` (Next middleware) verifies every protected
 navigation's session cookie against the backend's `/me` before the page is
@@ -506,7 +582,7 @@ session. Browser `<img>`/`<video>` tags can't attach an `Authorization`
 header the way `fetch()` can, so this exists for the same reason the
 backend proxies its own local-disk storage behind an authenticated route.
 
-## 12. Future scalability
+## 13. Future scalability
 
 Steps 1-3 intentionally do not implement LIVE, dating/matching,
 chat/calls, coins/gifts, monetization, ads, advanced recommendation AI, or

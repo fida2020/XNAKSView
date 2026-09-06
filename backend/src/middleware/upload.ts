@@ -53,6 +53,21 @@ const imageUpload = multer({
   },
 });
 
+const MAX_VOICE_MESSAGE_BYTES = 10 * 1024 * 1024;
+
+const audioUpload = multer({
+  storage: diskStorage,
+  limits: { fileSize: MAX_VOICE_MESSAGE_BYTES },
+  fileFilter: (_req, file, callback) => {
+    const isObviouslyNotAudio = /^(video|text|image)\//.test(file.mimetype) || file.mimetype === 'application/pdf';
+    if (isObviouslyNotAudio) {
+      callback(new AppError('BAD_REQUEST', `Unsupported file type: ${file.mimetype}`));
+      return;
+    }
+    callback(null, true);
+  },
+});
+
 function wrapUploadErrors(middleware: ReturnType<typeof multer.prototype.single>, maxBytes: number) {
   return (req: Request, res: Response, next: NextFunction): void => {
     middleware(req, res, (error: unknown) => {
@@ -83,4 +98,9 @@ export function uploadSingleVideo(fieldName: string) {
 /** Same as `uploadSingleVideo`, sized and filtered for images (e.g. a LIVE thumbnail). The field is optional — if absent, `req.file` is simply undefined. */
 export function uploadSingleImage(fieldName: string) {
   return wrapUploadErrors(imageUpload.single(fieldName), MAX_IMAGE_BYTES);
+}
+
+/** Same shape again, sized and filtered for voice messages. */
+export function uploadSingleAudio(fieldName: string) {
+  return wrapUploadErrors(audioUpload.single(fieldName), MAX_VOICE_MESSAGE_BYTES);
 }

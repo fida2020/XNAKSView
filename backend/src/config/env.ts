@@ -47,6 +47,13 @@ const envSchema = z.object({
   // LIVE eligibility (Step 4) — configurable so business thresholds can
   // change without a code change. 0 disables the check. See lib/liveEligibility.ts.
   LIVE_MIN_ACCOUNT_AGE_HOURS: z.coerce.number().int().min(0).default(0),
+
+  // Chat + calls (Step 5). See lib/voiceValidation.ts and routes/v1/calls.ts.
+  MAX_VOICE_MESSAGE_SECONDS: z.coerce.number().int().positive().default(120),
+  CALL_RING_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(45),
+  // How long after sending a sender may unsend/delete a message. See
+  // routes/v1/messages.ts.
+  MESSAGE_UNSEND_WINDOW_MINUTES: z.coerce.number().int().positive().default(1440),
 });
 
 export type Env = z.infer<typeof envSchema>;

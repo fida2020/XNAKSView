@@ -32,6 +32,15 @@ class FeedScreen extends ConsumerWidget {
           ),
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
+            right: 56,
+            child: IconButton(
+              icon: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+              tooltip: 'Messages',
+              onPressed: () => context.pushInbox(),
+            ),
+          ),
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
             right: 12,
             child: IconButton(
               icon: const Icon(Icons.person_outline, color: Colors.white),
