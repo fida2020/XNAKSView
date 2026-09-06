@@ -58,15 +58,22 @@ each video has exactly one playback rendition).
 Live streaming infrastructure, live chat, viewer counts, live-specific
 moderation, stream discovery.
 
-## Phase 5 — Dating / Matching
-
-Match model and matching logic, swipe/like mechanics, preferences and
-filters, match-safety features.
-
-## Phase 6 — Chat / Voice / Video Calls
+## Phase 5 — Chat / Voice / Video Calls
 
 Direct/group messaging (`Message` model), real-time delivery, voice
 calls, video calls, call history, block/report integration.
+
+## Phase 6 — TikTok Feature Parity / Social + Creation Features
+
+Stories, photo/text posts, Duet, Stitch, repost, favorites, hashtags,
+mentions, search, discover/trending, sounds, expanded video creation
+tools, effects/filters, drafts, creator playlists, expanded notifications,
+share/download controls, comments expansion, follow/friends experience,
+and profile expansion.
+
+Dating/Matching was previously planned here and has been permanently
+cancelled — it does not exist anywhere in XNAKView and will not be
+implemented.
 
 ## Phase 7 — Coins / Gifts / Creator Earnings
 

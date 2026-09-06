@@ -2,12 +2,17 @@
 
 **Company:** BALOCH SAHAB TECHNOLOGIES (SMC-PRIVATE) LIMITED
 **Domain:** balochsahab.com
-**Status:** Step 5 — Chat + Voice/Video Calls
+**Status:** Step 5 — Direct Messaging + Voice/Video Calls
 
 This document describes the architecture established in Step 1 and
 extended in Steps 2, 3, 4, and 5. It will be extended further, not
 rewritten, as later phases (see `ROADMAP.md`) add real functionality on top
 of this foundation.
+
+Dating/Matching was implemented under a working Step 6 and then permanently
+cancelled before being committed; it has been fully removed from this
+codebase and does not exist anywhere in XNAKView. Step 6 is now defined as
+TikTok-parity social + creation features (see `ROADMAP.md`).
 
 ## 1. Overall architecture
 
@@ -584,10 +589,9 @@ backend proxies its own local-disk storage behind an authenticated route.
 
 ## 13. Future scalability
 
-Steps 1-3 intentionally do not implement LIVE, dating/matching,
-chat/calls, coins/gifts, monetization, ads, advanced recommendation AI, or
-AI moderation — but the foundation is shaped so those can be added without
-rework:
+Steps 1-3 intentionally do not implement LIVE, chat/calls, coins/gifts,
+monetization, ads, advanced recommendation AI, or AI moderation — but the
+foundation is shaped so those can be added without rework:
 
 - **Database**: new domains are new Prisma models foreign-keyed to `User`;
   nothing in the Step 1 schema needs to change to support them.

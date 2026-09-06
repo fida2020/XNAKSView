@@ -226,6 +226,11 @@ enum VideoVisibility {
   PRIVATE
 }
 
+// Reused as the single canonical report-reason taxonomy across video, LIVE,
+// messaging, and calls — not video-specific despite the name (kept for
+// backward compatibility with the Step 3 migration that created it;
+// renaming a live enum is a bigger migration than the value itself is
+// worth).
 enum VideoReportReason {
   SPAM
   NUDITY_OR_SEXUAL_CONTENT

@@ -6,7 +6,7 @@ Monorepo for the XNAKView platform. This is **Step 3 — Video Platform**,
 built on Steps 1-2 (foundation, then auth/profiles): short-form video
 upload with real processing (FFmpeg transcoding + thumbnails), a
 vertical feed, likes/comments/shares/views, follow/unfollow, and video
-reporting — still with no LIVE, dating, chat, calls, coins, gifts,
+reporting — still with no LIVE, chat, calls, coins, gifts,
 monetization, ads, or advanced AI built yet. See
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phase plan and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how everything fits

@@ -71,7 +71,7 @@ on Windows as long as the Android SDK/toolchain is installed.
 
 ## What's deliberately not built yet
 
-Full authentication UI, video feed, LIVE, dating/matching, chat/calls,
+Full authentication UI, video feed, LIVE, chat/calls,
 coins/gifts, and any monetization or AI features — per the project roadmap
 (see `../docs/ROADMAP.md`), these are later phases. Step 1 only establishes
 the foundation both platforms build on top of.
