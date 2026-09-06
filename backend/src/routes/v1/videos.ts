@@ -10,6 +10,7 @@ import { probeVideo } from '@/lib/ffmpeg';
 import { logger } from '@/lib/logger';
 import { redis } from '@/lib/redis';
 import { storage, videoOriginalKey } from '@/lib/storage';
+import { streamAsset } from '@/lib/mediaStreaming';
 import { canViewVideo, fetchAuthorSummaries, fetchFollowingIds, fetchLikedVideoIds, serializeVideo } from '@/lib/videoAccess';
 import { processVideo } from '@/lib/videoProcessing';
 import { requireAuth } from '@/middleware/auth';
@@ -152,59 +153,6 @@ videosRouter.delete('/videos/:id', requireAuth, async (req, res, next) => {
 // File serving (local storage is proxied through the API; a future
 // object-storage driver would instead redirect to `storage.getPublicUrl`)
 // -----------------------------------------------------------------------
-
-async function streamAsset(
-  req: import('express').Request,
-  res: import('express').Response,
-  next: import('express').NextFunction,
-  key: string | null,
-  contentType: string,
-) {
-  try {
-    if (!key) {
-      throw new AppError('NOT_FOUND', 'Asset not available yet');
-    }
-
-    const publicUrl = storage.getPublicUrl(key);
-    if (publicUrl) {
-      res.redirect(publicUrl);
-      return;
-    }
-
-    const rangeHeader = req.headers.range;
-    if (rangeHeader) {
-      const { sizeBytes } = await storage.read(key);
-      const match = /^bytes=(\d+)-(\d*)$/.exec(rangeHeader);
-      if (!match) {
-        res.status(416).setHeader('Content-Range', `bytes */${sizeBytes}`).end();
-        return;
-      }
-      const start = Number(match[1]);
-      const end = match[2] ? Number(match[2]) : sizeBytes - 1;
-      if (start >= sizeBytes || end >= sizeBytes || start > end) {
-        res.status(416).setHeader('Content-Range', `bytes */${sizeBytes}`).end();
-        return;
-      }
-
-      const { stream } = await storage.read(key, { start, end });
-      res.status(206);
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${sizeBytes}`);
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Content-Length', end - start + 1);
-      res.setHeader('Content-Type', contentType);
-      stream.pipe(res);
-      return;
-    }
-
-    const { stream, sizeBytes } = await storage.read(key);
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Length', sizeBytes);
-    res.setHeader('Content-Type', contentType);
-    stream.pipe(res);
-  } catch (error) {
-    next(error);
-  }
-}
 
 videosRouter.get('/videos/:id/file', requireAuth, async (req, res, next) => {
   try {

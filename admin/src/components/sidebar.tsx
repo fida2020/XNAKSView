@@ -4,6 +4,8 @@ const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/videos', label: 'Videos' },
   { href: '/reports', label: 'Reports' },
+  { href: '/live', label: 'LIVE' },
+  { href: '/live-reports', label: 'LIVE Reports' },
   // Future sections mount here as their domains ship:
   // { href: '/users', label: 'Users' },
   // { href: '/verification', label: 'Verification' },

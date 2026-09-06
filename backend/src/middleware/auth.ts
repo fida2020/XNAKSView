@@ -11,6 +11,8 @@ export interface AuthenticatedUser {
   phone: string | null;
   status: UserStatus;
   ageVerified: boolean;
+  createdAt: Date;
+  isAdmin: boolean;
 }
 
 declare module 'express-serve-static-core' {
@@ -65,6 +67,8 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
       phone: user.phone,
       status: user.status,
       ageVerified: user.ageVerified,
+      createdAt: user.createdAt,
+      isAdmin: user.isAdmin,
     };
     req.sessionId = session.id;
 

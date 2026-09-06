@@ -53,6 +53,21 @@ model User {
 
   status UserStatus @default(PENDING_VERIFICATION)
 
+  // Minimal admin-role foundation (Step 4): a boolean flag, not a full RBAC
+  // system — deliberately so. There is no self-serve way to become an admin;
+  // an operator sets this directly in the database. `requireAdmin` (see
+  // middleware/requireAdmin.ts) is the only thing that reads it.
+  isAdmin Boolean @default(false)
+
+  // Enforcement audit trail — who last changed `status` and why, and when.
+  // Populated by lib/accountEnforcement.ts, which is the one place `status`
+  // should ever be written outside of registration. Plain string ids (no
+  // relation), matching the existing `assignedById`/`invitedById` convention
+  // used elsewhere in this schema.
+  statusReason      String?
+  statusUpdatedAt   DateTime?
+  statusUpdatedById String?
+
   // Denormalized so profile/feed reads never need a COUNT() query.
   // Maintained transactionally alongside the Follow rows that back them.
   followerCount  Int @default(0)
@@ -74,6 +89,21 @@ model User {
 
   following Follow[] @relation("Following")
   followers Follow[] @relation("Followers")
+
+  liveSessions             LiveSession[]
+  liveViewerships          LiveViewer[]
+  liveChatMessages         LiveChatMessage[]
+  liveReports              LiveReport[]
+  liveEvents               LiveEvent[]
+  liveEventReminders       LiveEventReminder[]
+  liveModeratorOf          LiveModerator[]
+  liveRestrictions         LiveViewerRestriction[]
+  liveGuestSlots           LiveGuestSlot[]
+  liveViewerReports        LiveViewerReport[]      @relation("LiveViewerReportReporter")
+  liveViewerReportsAgainst LiveViewerReport[]      @relation("LiveViewerReportTarget")
+  liveChatMessageReports   LiveChatMessageReport[]
+  creatorSubscriptions     LiveSubscription[]      @relation("CreatorSubscriptions")
+  fanSubscriptions         LiveSubscription[]      @relation("FanSubscriptions")
 
   @@index([status])
   @@map("users")
@@ -320,4 +350,409 @@ model VideoReport {
   @@index([videoId])
   @@index([status])
   @@map("video_reports")
+}
+
+// ---------------------------------------------------------------------------
+// LIVE streaming (Step 4)
+// ---------------------------------------------------------------------------
+
+enum LiveStatus {
+  LIVE
+  ENDED
+}
+
+// Recording ("replay") of a finished LIVE session. NONE means the host
+// didn't request one; the rest of the lifecycle exists so the API can
+// express real states even though the recording pipeline itself (LiveKit
+// Egress) is not deployed in Step 4 — see docs/STEP4_PROGRESS.md.
+enum LiveReplayStatus {
+  NONE
+  NOT_AVAILABLE
+  PROCESSING
+  AVAILABLE
+  DELETED
+}
+
+model LiveSession {
+  id String @id @default(uuid())
+
+  hostId String
+  host   User   @relation(fields: [hostId], references: [id], onDelete: Cascade)
+
+  title    String
+  category String?
+
+  // Storage key (same convention as Video), resolved through the storage
+  // abstraction — a thumbnail is optional; LIVE can start without one.
+  thumbnailKey String?
+
+  status LiveStatus @default(LIVE)
+
+  // Denormalized, maintained transactionally by join/leave — see
+  // lib/liveViewers.ts. Tracks explicit join/leave API calls (the client's
+  // stated intent to view), not raw WebRTC connection state — see
+  // docs/STEP4_PROGRESS.md for why, and what a fuller reconciliation would add.
+  viewerCount     Int @default(0)
+  peakViewerCount Int @default(0)
+
+  // Co-host / multi-guest foundation (Step 4): how many non-host
+  // participants may hold an ACTIVE LiveGuestSlot at once. Defaults to the
+  // classic single co-host; raising it is what "multi-guest" means here —
+  // no schema change needed to support more slots later.
+  maxGuestSlots Int @default(1)
+
+  // Subscriber-only chat foundation — the flag exists and is enforced by
+  // the chat route, but nothing can set a LiveSubscription to ACTIVE yet
+  // without a payment flow (a later monetization step), so this is
+  // functional but practically always off until that exists.
+  subscriberOnlyChat Boolean @default(false)
+
+  // LIVE replay foundation — see LiveReplayStatus above.
+  replayEnabled Boolean          @default(false)
+  replayStatus  LiveReplayStatus @default(NONE)
+  replayKey     String?
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  viewers       LiveViewer[]
+  chatMessages  LiveChatMessage[]
+  reports       LiveReport[]
+  viewerReports LiveViewerReport[]
+  event         LiveEvent?
+  moderators    LiveModerator[]
+  restrictions  LiveViewerRestriction[]
+  guestSlots    LiveGuestSlot[]
+  matchesAsA    LiveMatch[]             @relation("MatchSessionA")
+  matchesAsB    LiveMatch[]             @relation("MatchSessionB")
+
+  @@index([status, startedAt])
+  @@index([hostId])
+  @@map("live_sessions")
+}
+
+model LiveViewer {
+  id String @id @default(uuid())
+
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One row per (session, user) for the session's whole lifetime — rejoining
+  // updates this row (joinedAt reset, leftAt cleared) rather than inserting a
+  // new one. `leftAt IS NULL` is "currently watching"; the unique constraint
+  // is what makes "duplicate join protection" a database guarantee (a second
+  // concurrent join request can't create a second active row) rather than an
+  // application-level race.
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+
+  @@unique([liveSessionId, userId])
+  @@index([liveSessionId])
+  @@map("live_viewers")
+}
+
+model LiveChatMessage {
+  id String @id @default(uuid())
+
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  text String
+
+  createdAt DateTime @default(now())
+
+  reports LiveChatMessageReport[]
+
+  @@index([liveSessionId, createdAt])
+  @@map("live_chat_messages")
+}
+
+model LiveReport {
+  id String @id @default(uuid())
+
+  liveSessionId String
+  liveSession   LiveSession       @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  reporterId    String
+  reporter      User              @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason        VideoReportReason
+  description   String?
+  status        VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Same reasoning as VideoReport: one report per user per LIVE session,
+  // enforced at the database level.
+  @@unique([liveSessionId, reporterId])
+  @@index([liveSessionId])
+  @@index([status])
+  @@map("live_reports")
+}
+
+// Reporting a specific participant in a LIVE session (as distinct from
+// reporting the session as a whole, which LiveReport already covers).
+model LiveViewerReport {
+  id String @id @default(uuid())
+
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  reportedUserId String
+  reportedUser   User   @relation("LiveViewerReportTarget", fields: [reportedUserId], references: [id], onDelete: Cascade)
+
+  reporterId String
+  reporter   User   @relation("LiveViewerReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+
+  reason      VideoReportReason
+  description String?
+  status      VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([liveSessionId, reportedUserId, reporterId])
+  @@index([liveSessionId])
+  @@map("live_viewer_reports")
+}
+
+// Reporting a specific LIVE chat message.
+model LiveChatMessageReport {
+  id String @id @default(uuid())
+
+  liveChatMessageId String
+  liveChatMessage   LiveChatMessage @relation(fields: [liveChatMessageId], references: [id], onDelete: Cascade)
+
+  reporterId String
+  reporter   User   @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  reason      VideoReportReason
+  description String?
+  status      VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([liveChatMessageId, reporterId])
+  @@map("live_chat_message_reports")
+}
+
+// LIVE scheduling ("LIVE events") — a creator announces an upcoming LIVE so
+// followers can discover it and set a reminder ahead of time. Starting the
+// event creates/attaches a real LiveSession; this model itself never
+// carries stream media.
+enum LiveEventStatus {
+  SCHEDULED
+  STARTED
+  CANCELLED
+}
+
+model LiveEvent {
+  id String @id @default(uuid())
+
+  hostId String
+  host   User   @relation(fields: [hostId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  category    String?
+  scheduledAt DateTime
+
+  status LiveEventStatus @default(SCHEDULED)
+
+  liveSessionId String?      @unique
+  liveSession   LiveSession? @relation(fields: [liveSessionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reminders LiveEventReminder[]
+
+  @@index([status, scheduledAt])
+  @@index([hostId])
+  @@map("live_events")
+}
+
+// A follower asking to be reminded when a scheduled LIVE starts. Step 4
+// only records the request — actual push/notification delivery is a later
+// step's notification-fan-out infrastructure (see docs/STEP4_PROGRESS.md).
+model LiveEventReminder {
+  id String @id @default(uuid())
+
+  liveEventId String
+  liveEvent   LiveEvent @relation(fields: [liveEventId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([liveEventId, userId])
+  @@map("live_event_reminders")
+}
+
+// Host-appointed moderators for a specific LIVE session — grants
+// mute/block/remove-comment authority without granting host-only powers
+// (ending the LIVE, managing guests).
+model LiveModerator {
+  id String @id @default(uuid())
+
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  assignedById String
+
+  createdAt DateTime @default(now())
+
+  @@unique([liveSessionId, userId])
+  @@index([liveSessionId])
+  @@map("live_moderators")
+}
+
+// Per-session mute (can watch, can't chat) / block (can't rejoin at all)
+// applied by the host or a moderator.
+enum LiveRestrictionType {
+  MUTED
+  BLOCKED
+}
+
+model LiveViewerRestriction {
+  id String @id @default(uuid())
+
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type LiveRestrictionType
+
+  createdById String
+
+  createdAt DateTime @default(now())
+
+  @@unique([liveSessionId, userId, type])
+  @@index([liveSessionId])
+  @@map("live_viewer_restrictions")
+}
+
+// Server-side keyword filter for LIVE chat — admin-managed, checked before
+// a chat message is ever persisted (see routes/v1/live.ts).
+model LiveBlockedWord {
+  id   String @id @default(uuid())
+  word String @unique
+
+  createdAt DateTime @default(now())
+
+  @@map("live_blocked_words")
+}
+
+// Unifies co-host (role: CO_HOST) and multi-guest (role: GUEST) into one
+// scalable participant model — LiveSession.maxGuestSlots is the only thing
+// that changes between "one co-host" and "multiple guests," not the schema.
+enum LiveGuestRole {
+  CO_HOST
+  GUEST
+}
+
+enum LiveGuestStatus {
+  INVITED
+  ACTIVE
+  DECLINED
+  REMOVED
+  LEFT
+}
+
+model LiveGuestSlot {
+  id String @id @default(uuid())
+
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role   LiveGuestRole   @default(GUEST)
+  status LiveGuestStatus @default(INVITED)
+
+  invitedById String
+
+  respondedAt DateTime?
+  joinedAt    DateTime?
+  leftAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([liveSessionId, userId])
+  @@index([liveSessionId, status])
+  @@map("live_guest_slots")
+}
+
+// LIVE Match / Battle — pairs two hosts' own LiveSessions against each
+// other. Deliberately has no Coins/Gifts fields yet; viewer "support" for a
+// side and score contribution are a later step's concern once Coins/Gifts
+// exist (see docs/STEP4_PROGRESS.md for the planned event-interface hook).
+enum LiveMatchStatus {
+  PENDING
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+model LiveMatch {
+  id String @id @default(uuid())
+
+  sessionAId String
+  sessionA   LiveSession @relation("MatchSessionA", fields: [sessionAId], references: [id], onDelete: Cascade)
+  sessionBId String
+  sessionB   LiveSession @relation("MatchSessionB", fields: [sessionBId], references: [id], onDelete: Cascade)
+
+  status LiveMatchStatus @default(PENDING)
+
+  scoreA Int @default(0)
+  scoreB Int @default(0)
+
+  winnerSessionId String?
+  durationSeconds Int     @default(180)
+
+  startedAt DateTime?
+  endedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@map("live_matches")
+}
+
+// Fan/subscriber foundation — deliberately has no payment/billing fields.
+// Nothing in Step 4 can ever set status to ACTIVE outside of tests, since
+// the subscription-purchase flow is a later monetization step; the model
+// and its enforcement hook (LiveSession.subscriberOnlyChat) exist now so
+// that step can plug in without a schema change.
+enum LiveSubscriptionStatus {
+  ACTIVE
+  CANCELLED
+}
+
+model LiveSubscription {
+  id String @id @default(uuid())
+
+  creatorId String
+  creator   User   @relation("CreatorSubscriptions", fields: [creatorId], references: [id], onDelete: Cascade)
+  fanId     String
+  fan       User   @relation("FanSubscriptions", fields: [fanId], references: [id], onDelete: Cascade)
+
+  status LiveSubscriptionStatus @default(ACTIVE)
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  @@unique([creatorId, fanId])
+  @@index([creatorId])
+  @@map("live_subscriptions")
 }

@@ -23,6 +23,15 @@ class FeedScreen extends ConsumerWidget {
           ),
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
+            left: 12,
+            child: IconButton(
+              icon: const Icon(Icons.live_tv, color: Colors.white),
+              tooltip: 'LIVE',
+              onPressed: () => context.pushLiveDiscovery(),
+            ),
+          ),
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
             right: 12,
             child: IconButton(
               icon: const Icon(Icons.person_outline, color: Colors.white),

@@ -34,6 +34,19 @@ const envSchema = z.object({
 
   FFMPEG_PATH: z.string().default('ffmpeg'),
   FFPROBE_PATH: z.string().default('ffprobe'),
+
+  // LIVE streaming (Step 4) is behind lib/liveStreaming's LiveStreamingProvider
+  // abstraction — LiveKit (self-hosted) is the only implementation today.
+  // LIVEKIT_HOST is the backend's server-to-server control API address;
+  // LIVEKIT_WS_URL is what's handed to clients (mobile) to actually connect.
+  LIVEKIT_HOST: z.string().default('http://localhost:7880'),
+  LIVEKIT_WS_URL: z.string().default('ws://localhost:7880'),
+  LIVEKIT_API_KEY: z.string().min(1, 'LIVEKIT_API_KEY is required'),
+  LIVEKIT_API_SECRET: z.string().min(32, 'LIVEKIT_API_SECRET must be at least 32 characters'),
+
+  // LIVE eligibility (Step 4) — configurable so business thresholds can
+  // change without a code change. 0 disables the check. See lib/liveEligibility.ts.
+  LIVE_MIN_ACCOUNT_AGE_HOURS: z.coerce.number().int().min(0).default(0),
 });
 
 export type Env = z.infer<typeof envSchema>;

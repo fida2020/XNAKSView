@@ -56,6 +56,12 @@ dependencies:
   # Picking a video from the gallery to upload
   image_picker: ^1.1.2
 
+  # LIVE streaming: WebRTC client for the self-hosted LiveKit server
+  livekit_client: ^2.4.2
+
+  # Runtime camera/microphone permission requests for going LIVE
+  permission_handler: ^11.3.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

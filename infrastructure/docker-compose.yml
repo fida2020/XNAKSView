@@ -1,12 +1,12 @@
 # Local development infrastructure for XNAKView.
 #
-# Docker was not installed on the machine this was authored on, so this file
-# is written for future use and has NOT been run/tested locally. Once Docker
-# Desktop (or an equivalent) is installed, bring it up with:
+# Bring it up with:
 #
 #   docker compose -f infrastructure/docker-compose.yml up -d
 #
 # and point backend/.env at these services (matching backend/.env.example).
+# All three services (Postgres, Redis, LiveKit) have been run and verified
+# locally, not just written speculatively.
 
 services:
   postgres:
@@ -40,6 +40,30 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Self-hosted WebRTC SFU for LIVE streaming (Step 4). Dev-mode keys below
+  # are placeholders matching backend/.env.example — replace both before
+  # using this anywhere beyond local development. The backend never talks
+  # to LiveKit's media ports directly; it only calls the HTTP control API
+  # (7880) to create/delete rooms and mint join tokens — actual audio/video
+  # flows directly between clients and this server.
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: xnakview-livekit
+    restart: unless-stopped
+    command: ["--keys", "devkey: devsecret32characterslongforlocaldev", "--dev", "--bind", "0.0.0.0"]
+    ports:
+      - "7880:7880" # HTTP/WebSocket signaling + control API
+      - "7881:7881" # TCP fallback for WebRTC
+      # WebRTC media (narrowed range for local dev). NOT 50000-50100: Windows
+      # reserves UDP ports for its own dynamic allocation, and by default
+      # that exclusion range covers part or all of 50000-50100 (confirmed via
+      # `netsh int ipv4 show excludedportrange protocol=udp`), which makes
+      # Docker's port-publish fail with "ports are not available" on a
+      # Windows host. 51000-51100 is clear of that reservation. If this still
+      # collides on a given machine, check the same netsh command and move
+      # the range again — Windows's exclusions shift across reboots.
+      - "51000-51100:51000-51100/udp"
 
 volumes:
   xnakview_postgres_data:

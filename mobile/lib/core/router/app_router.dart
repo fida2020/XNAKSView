@@ -6,6 +6,7 @@ import '../../features/auth/domain/auth_state.dart';
 import '../../features/auth/presentation/auth_controller.dart';
 import '../../features/auth/presentation/register_screen.dart';
 import '../../features/auth/presentation/sign_in_screen.dart';
+import '../../features/live/presentation/live_discovery_screen.dart';
 import '../../features/profile/presentation/profile_setup_screen.dart';
 import '../../features/splash/presentation/splash_screen.dart';
 import '../../features/video/presentation/creator_profile_screen.dart';
@@ -20,11 +21,13 @@ abstract class AppRoutes {
   static const home = '/home';
   static const uploadVideo = '/upload';
   static const creatorProfile = '/profile';
+  static const live = '/live';
 }
 
 extension AppNavigation on BuildContext {
   void pushRegister() => push(AppRoutes.register);
   void pushUploadVideo() => push(AppRoutes.uploadVideo);
+  void pushLiveDiscovery() => push(AppRoutes.live);
 
   /// Omit [userId] to view the signed-in user's own profile.
   void pushCreatorProfile({String? userId}) =>
@@ -74,6 +77,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '${AppRoutes.creatorProfile}/:userId',
         builder: (context, state) => CreatorProfileScreen(userId: state.pathParameters['userId']),
       ),
+      GoRoute(path: AppRoutes.live, builder: (context, state) => const LiveDiscoveryScreen()),
     ],
   );
 });

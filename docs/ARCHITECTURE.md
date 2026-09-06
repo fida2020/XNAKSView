@@ -2,11 +2,11 @@
 
 **Company:** BALOCH SAHAB TECHNOLOGIES (SMC-PRIVATE) LIMITED
 **Domain:** balochsahab.com
-**Status:** Step 3 — Video Platform
+**Status:** Step 4 — LIVE Streaming
 
 This document describes the architecture established in Step 1 and
-extended in Steps 2 and 3. It will be extended further, not rewritten, as
-later phases (see `ROADMAP.md`) add real functionality on top of this
+extended in Steps 2, 3, and 4. It will be extended further, not rewritten,
+as later phases (see `ROADMAP.md`) add real functionality on top of this
 foundation.
 
 ## 1. Overall architecture
@@ -271,7 +271,132 @@ table were deliberately *not* created.
   (60s / 3s) sized to absorb accidental duplicate requests without
   capping legitimate repeated engagement over time.
 
-## 7. Security approach
+## 7. LIVE streaming architecture (Step 4)
+
+- **Real WebRTC, not fake HTTP-upload "LIVE."** Host publishing and viewer
+  playback both go over WebRTC via a self-hosted **LiveKit** SFU
+  (`infrastructure/docker-compose.yml`'s `livekit` service), not ordinary
+  video file upload/playback. This is the concrete difference between a
+  genuine low-latency LIVE feature and a video feed that merely refreshes
+  quickly.
+- **The streaming engine is abstracted, not hardcoded.** `lib/liveStreaming.ts`
+  defines a `LiveStreamingProvider` interface (`createRoom`, `deleteRoom`,
+  `generateToken`, `getParticipantCount`, `wsUrl`); `LiveKitStreamingProvider`
+  is the only implementation today, wrapping `livekit-server-sdk`'s
+  `RoomServiceClient` (room lifecycle) and `AccessToken` (signed, scoped
+  join tokens). Every route calls the interface, never the SDK directly —
+  swapping to a different SFU or a managed provider (Agora, a hosted
+  LiveKit Cloud instance, etc.) later means implementing this one
+  interface, not touching routes, models, or mobile code beyond the
+  connection URL/token it already treats as opaque.
+- **Provider choice, and why:** LiveKit was chosen over Agora (proprietary
+  SaaS, requires a vendor account and recurring cost even for local dev)
+  and Mux (HLS-based — higher latency, a weaker fit for "low-latency live
+  video" than WebRTC) because it is open-source, self-hostable (so local
+  development and future self-managed production both work without a
+  third-party account), and has official, actively maintained server
+  (`livekit-server-sdk`) and Flutter (`livekit_client`) SDKs. The choice
+  was verified empirically, not assumed: the real server was run locally,
+  a real room was created/listed/deleted, and a real signed JWT was
+  generated and decoded via a standalone script before any application
+  code was written against it (see `STEP4_PROGRESS.md` §2 for the actual
+  evidence).
+- **Authorization is server-issued, never client-asserted.** A join token's
+  `canPublish` grant is set by the backend based on whether the caller is
+  the session's `hostId` (from the authenticated JWT, never a client-
+  supplied field) — a viewer's token is always subscribe-only. The LiveKit
+  server itself enforces this grant at the SFU level, so a modified mobile
+  client couldn't publish video by lying about its role even if it tried;
+  the enforcement point is the media server, not just the REST API.
+- **Session lifecycle is a database row, not just a LiveKit room.**
+  `LiveSession.status` (`LIVE`/`ENDED`) is the source of truth the REST API
+  enforces (join/chat/reconnect all reject once `ENDED`); the LiveKit room
+  is created alongside it and deleted when the host ends the session — two
+  systems kept in sync by the same request handler, not by polling one
+  from the other.
+- **Duplicate-join is idempotent, not rejected.** Rejoining a session the
+  viewer already has an active `LiveViewer` row for returns `200` with a
+  fresh token and does **not** re-increment `viewerCount` — this is what
+  makes "duplicate join protection" mean "the count can't be inflated by
+  the same person," not "a reconnecting mobile client gets an error,"
+  which would be the wrong behavior for a network blip or app
+  backgrounding.
+- **Ending a session cleans up viewer state in the same transaction** that
+  flips `status` to `ENDED` — every active `LiveViewer` row for that
+  session gets `leftAt` set, so no viewer is left "active" against a
+  session that no longer exists, and a subsequent `/leave` call for that
+  viewer correctly reports nothing left to leave (`404`) rather than
+  silently succeeding against a dead session.
+- **Viewer count has one source of truth: the database, not WebRTC.**
+  `LiveSession.viewerCount`/`peakViewerCount` are maintained transactionally
+  by the `/join` and `/leave` REST calls (see the idempotent-join bullet
+  above) — never derived from the LiveKit room's live participant list.
+  Every surface that shows a count (host screen, viewer screen, admin,
+  discovery) polls or reads this same field, which is also why co-host/
+  guest participants never inflate it: guests are tracked in a separate
+  `LiveGuestSlot` model and are never inserted into `LiveViewer`, so they
+  can join the LiveKit room and publish without ever counting as a
+  "viewer." (An earlier version of the host screen derived its count from
+  `Room.remoteParticipants.length` instead, which would have double-counted
+  guests once that UI exists — fixed to poll the same API the other three
+  surfaces already used.)
+- **Guest-slot acceptance is concurrency-safe, not just wrapped in a
+  transaction.** Accepting a co-host/guest invite reads the session's
+  active-guest count and writes `ACTIVE` inside a `Serializable`-isolation
+  transaction (`routes/v1/liveGuests.ts`), so two guests accepting the last
+  free slot at the same instant can't both succeed — Postgres aborts one as
+  a serialization failure, surfaced as `409 Conflict`, not silently
+  overrunning `maxGuestSlots`.
+- **LIVE Match / Battle requires the challenged host's consent.** Creating a
+  match (`POST /live/:id/match`) only proposes it (`PENDING`); only the
+  *challenged* host — never the challenger, and never a bystander — can
+  `POST /live/matches/:matchId/accept` or `/decline`. A host cannot force
+  another session into a battle by creating and then unilaterally starting
+  one, mirroring the invite/accept/decline shape the guest-slot flow
+  already used. Score contribution (`/score`) requires the caller to
+  actually be a host, active viewer, or active guest of one of the two
+  sessions — not just any authenticated account.
+- **Admin authorization is a real (if minimal) gate, not `requireAuth` alone.**
+  Every `/admin/*` route — including LIVE inspection and the chat keyword
+  filter — requires `User.isAdmin`, checked by `middleware/requireAdmin.ts`
+  after `requireAuth`. There is no self-serve way to become an admin (an
+  operator sets the flag directly in the database); this is deliberately a
+  boolean, not a role/permission system, because a fake multi-role system
+  would be worse than an honestly minimal one. This closed a real gap: an
+  earlier version gated these routes by `requireAuth` only, so any
+  registered user could read report/host contact details and — for the
+  blocked-word list specifically — disable the chat keyword filter outright.
+- **Account enforcement (ban/suspend) has one call path.**
+  `lib/accountEnforcement.ts`'s `enforceAccountStatus()` is the only place
+  `User.status` is set for moderation purposes; `POST
+  /admin/users/:id/status` (admin-only) calls it today. `requireAuth`
+  re-reads `status` from the database on every request rather than trusting
+  the JWT, so a ban/suspension takes effect on the target's very next
+  authenticated call — no token revocation needed. This is the manual
+  enforcement path implied by `UserStatus.SUSPENDED`/`BANNED` existing since
+  Step 2 but never being reachable by anything; it is also the intended
+  call site for a future automated abuse-detection system (not built in
+  Step 4 — see below), so that system reuses the same admin-can't-touch-
+  another-admin rule and audit fields instead of duplicating them.
+- **What Step 4 implements vs. what it deliberately defers.** Implemented:
+  co-hosting/multi-guest (`LiveGuestSlot`, consent-gated), LIVE Match/Battle
+  (challenge/accept/decline, score, winner), moderator roles beyond
+  host/viewer (`LiveModerator`, mute/block, keyword filter), LIVE
+  scheduling (`LiveEvent` + reminders), a replay *status* foundation
+  (`LiveReplayStatus`), and a subscriber-only-chat *gate*
+  (`LiveSession.subscriberOnlyChat`). Deliberately NOT implemented, because
+  they belong to later monetization/communication steps and only a clean
+  hook exists today: the actual LIVE recording/egress pipeline behind the
+  replay status, Coins/wallet, Gift financial transactions, creator
+  payouts/withdrawals, ad monetization, Agency commissions, paid
+  subscriptions (the `LiveSubscription` model has no purchase flow — an
+  admin/test can only create one directly), full chat/DM, and voice/video
+  calling. LIVE chat itself is REST-polled (`GET /live/:id/chat` every few
+  seconds from the mobile client), not a real-time push channel — LiveKit's
+  own data-track messaging is a natural upgrade path without changing the
+  chat data model.
+
+## 8. Security approach
 
 - **Password hashing**: `bcryptjs`, 12 rounds — `passwordHash` is the only
   form a password ever takes at rest; plaintext is never logged or returned
@@ -309,14 +434,14 @@ table were deliberately *not* created.
   credentials that match `.env.example`, not anything resembling a
   production secret.
 
-## 8. API versioning
+## 9. API versioning
 
 All routes are mounted under `/api/v1`. A future breaking change gets its
 own `/api/v2` mounted alongside `v1` rather than mutating `v1` in place,
 so existing mobile app installs that haven't updated yet keep working
 against the version they were built against.
 
-## 9. Mobile architecture (Android + iOS)
+## 10. Mobile architecture (Android + iOS)
 
 Single Flutter codebase, both platforms built from the same `lib/` source
 — no platform-forked product logic. Clean-architecture-flavored layering:
@@ -357,7 +482,7 @@ inside its implementation or by the underlying plugin — not
 `Platform.isAndroid`/`Platform.isIOS` branches scattered through feature
 code.
 
-## 10. Admin architecture
+## 11. Admin architecture
 
 Next.js (App Router). `proxy.ts` (Next middleware) verifies every protected
 navigation's session cookie against the backend's `/me` before the page is
@@ -381,7 +506,7 @@ session. Browser `<img>`/`<video>` tags can't attach an `Authorization`
 header the way `fetch()` can, so this exists for the same reason the
 backend proxies its own local-disk storage behind an authenticated route.
 
-## 11. Future scalability
+## 12. Future scalability
 
 Steps 1-3 intentionally do not implement LIVE, dating/matching,
 chat/calls, coins/gifts, monetization, ads, advanced recommendation AI, or

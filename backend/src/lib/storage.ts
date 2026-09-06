@@ -138,6 +138,10 @@ export function videoPlaybackKey(videoId: string): string {
   return `videos/${videoId}/playback.mp4`;
 }
 
+export function liveThumbnailKey(liveSessionId: string, extension: string): string {
+  return `live/${liveSessionId}/thumbnail${extension}`;
+}
+
 export function videoThumbnailKey(videoId: string): string {
   return `videos/${videoId}/thumbnail.jpg`;
 }

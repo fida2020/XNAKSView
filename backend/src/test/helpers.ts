@@ -3,6 +3,7 @@ import path from 'path';
 import request from 'supertest';
 
 import { createApp } from '@/app';
+import { prisma } from '@/lib/prisma';
 
 export const app = createApp();
 
@@ -42,6 +43,19 @@ export async function registerUser(overrides: Partial<Record<string, unknown>> =
 }
 
 export { STRONG_PASSWORD };
+
+/**
+ * There is no endpoint that grants admin access (see
+ * middleware/requireAdmin.ts) — an operator sets it directly in the
+ * database. Tests do the same thing an operator would, via Prisma, rather
+ * than exercising a privilege-escalation endpoint that doesn't and
+ * shouldn't exist.
+ */
+export async function registerAdmin(overrides: Partial<Record<string, unknown>> = {}) {
+  const { response, body } = await registerUser(overrides);
+  await prisma.user.update({ where: { id: response.body.user.id }, data: { isAdmin: true } });
+  return { response, body };
+}
 
 export async function uploadSampleVideo(
   accessToken: string,

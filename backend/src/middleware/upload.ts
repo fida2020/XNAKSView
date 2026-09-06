@@ -13,11 +13,13 @@ if (!existsSync(tempUploadDir)) {
   mkdirSync(tempUploadDir, { recursive: true });
 }
 
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, callback) => callback(null, tempUploadDir),
-    filename: (_req, file, callback) => callback(null, `${randomUUID()}${path.extname(file.originalname)}`),
-  }),
+const diskStorage = multer.diskStorage({
+  destination: (_req, _file, callback) => callback(null, tempUploadDir),
+  filename: (_req, file, callback) => callback(null, `${randomUUID()}${path.extname(file.originalname)}`),
+});
+
+const videoUpload = multer({
+  storage: diskStorage,
   limits: { fileSize: env.MAX_UPLOAD_BYTES },
   fileFilter: (_req, file, callback) => {
     // A mimetype check alone is a cheap, spoofable first line of defense —
@@ -36,10 +38,22 @@ const upload = multer({
   },
 });
 
-/** Wraps multer's `single()` so its errors flow through our normal AppError → HTTP mapping. */
-export function uploadSingleVideo(fieldName: string) {
-  const middleware = upload.single(fieldName);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
+const imageUpload = multer({
+  storage: diskStorage,
+  limits: { fileSize: MAX_IMAGE_BYTES },
+  fileFilter: (_req, file, callback) => {
+    const isObviouslyNotImage = /^(video|text|audio)\//.test(file.mimetype) || file.mimetype === 'application/pdf';
+    if (isObviouslyNotImage) {
+      callback(new AppError('BAD_REQUEST', `Unsupported file type: ${file.mimetype}`));
+      return;
+    }
+    callback(null, true);
+  },
+});
+
+function wrapUploadErrors(middleware: ReturnType<typeof multer.prototype.single>, maxBytes: number) {
   return (req: Request, res: Response, next: NextFunction): void => {
     middleware(req, res, (error: unknown) => {
       if (!error) {
@@ -49,7 +63,7 @@ export function uploadSingleVideo(fieldName: string) {
 
       if (error instanceof MulterError) {
         if (error.code === 'LIMIT_FILE_SIZE') {
-          next(new AppError('BAD_REQUEST', `File exceeds the maximum upload size of ${env.MAX_UPLOAD_BYTES} bytes`));
+          next(new AppError('BAD_REQUEST', `File exceeds the maximum upload size of ${maxBytes} bytes`));
           return;
         }
         next(new AppError('BAD_REQUEST', `Upload error: ${error.message}`));
@@ -59,4 +73,14 @@ export function uploadSingleVideo(fieldName: string) {
       next(error);
     });
   };
+}
+
+/** Wraps multer's `single()` so its errors flow through our normal AppError → HTTP mapping. */
+export function uploadSingleVideo(fieldName: string) {
+  return wrapUploadErrors(videoUpload.single(fieldName), env.MAX_UPLOAD_BYTES);
+}
+
+/** Same as `uploadSingleVideo`, sized and filtered for images (e.g. a LIVE thumbnail). The field is optional — if absent, `req.file` is simply undefined. */
+export function uploadSingleImage(fieldName: string) {
+  return wrapUploadErrors(imageUpload.single(fieldName), MAX_IMAGE_BYTES);
 }
