@@ -6,7 +6,13 @@ import '../../features/auth/domain/auth_state.dart';
 import '../../features/auth/presentation/auth_controller.dart';
 import '../../features/auth/presentation/register_screen.dart';
 import '../../features/auth/presentation/sign_in_screen.dart';
+import '../../features/activity/presentation/activity_screen.dart';
+import '../../features/discovery/presentation/search_screen.dart';
 import '../../features/live/presentation/live_discovery_screen.dart';
+import '../../features/playlists/presentation/playlist_detail_screen.dart';
+import '../../features/playlists/presentation/playlists_screen.dart';
+import '../../features/social/presentation/followers_screen.dart';
+import '../../features/social/presentation/suggested_accounts_screen.dart';
 import '../../features/messaging/presentation/call_history_screen.dart';
 import '../../features/messaging/presentation/call_screen.dart';
 import '../../features/messaging/presentation/chat_screen.dart';
@@ -15,7 +21,9 @@ import '../../features/messaging/presentation/inbox_screen.dart';
 import '../../features/profile/presentation/profile_setup_screen.dart';
 import '../../features/splash/presentation/splash_screen.dart';
 import '../../features/video/presentation/creator_profile_screen.dart';
+import '../../features/video/presentation/duet_create_screen.dart';
 import '../../features/video/presentation/feed_screen.dart';
+import '../../features/video/presentation/stitch_create_screen.dart';
 import '../../features/video/presentation/upload_video_screen.dart';
 import 'navigator_key.dart';
 
@@ -33,15 +41,30 @@ abstract class AppRoutes {
   static const callHistory = '/calls';
   static const incomingCall = '/incoming-call';
   static const activeCall = '/active-call';
+  static const activity = '/activity';
+  static const search = '/search';
+  static const playlists = '/playlists';
+  static const followers = '/followers';
+  static const suggestedAccounts = '/suggested-accounts';
+  static const duetCreate = '/duet';
+  static const stitchCreate = '/stitch';
 }
 
 extension AppNavigation on BuildContext {
   void pushRegister() => push(AppRoutes.register);
-  void pushUploadVideo() => push(AppRoutes.uploadVideo);
+  void pushUploadVideo({String? soundId}) => push(AppRoutes.uploadVideo, extra: {'soundId': soundId});
   void pushLiveDiscovery() => push(AppRoutes.live);
   void pushInbox() => push(AppRoutes.inbox);
   void pushChat(String conversationId) => push('${AppRoutes.chat}/$conversationId');
   void pushCallHistory() => push(AppRoutes.callHistory);
+  void pushActivity() => push(AppRoutes.activity);
+  void pushSearch() => push(AppRoutes.search);
+  void pushPlaylists({String? userId}) => push(AppRoutes.playlists, extra: {'userId': userId});
+  void pushPlaylistDetail(String playlistId) => push('${AppRoutes.playlists}/$playlistId');
+  void pushFollowers(String userId) => push('${AppRoutes.followers}/$userId');
+  void pushSuggestedAccounts() => push(AppRoutes.suggestedAccounts);
+  void pushDuetCreate(String sourceVideoId) => push('${AppRoutes.duetCreate}/$sourceVideoId');
+  void pushStitchCreate(String sourceVideoId) => push('${AppRoutes.stitchCreate}/$sourceVideoId');
 
   void pushActiveCall({
     required String callId,
@@ -102,7 +125,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: AppRoutes.register, builder: (context, state) => const RegisterScreen()),
       GoRoute(path: AppRoutes.profileSetup, builder: (context, state) => const ProfileSetupScreen()),
       GoRoute(path: AppRoutes.home, builder: (context, state) => const FeedScreen()),
-      GoRoute(path: AppRoutes.uploadVideo, builder: (context, state) => const UploadVideoScreen()),
+      GoRoute(
+        path: AppRoutes.uploadVideo,
+        builder: (context, state) => UploadVideoScreen(initialSoundId: (state.extra as Map?)?['soundId'] as String?),
+      ),
       GoRoute(path: AppRoutes.creatorProfile, builder: (context, state) => const CreatorProfileScreen()),
       GoRoute(
         path: '${AppRoutes.creatorProfile}/:userId',
@@ -115,6 +141,29 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => ChatScreen(conversationId: state.pathParameters['conversationId']!),
       ),
       GoRoute(path: AppRoutes.callHistory, builder: (context, state) => const CallHistoryScreen()),
+      GoRoute(path: AppRoutes.activity, builder: (context, state) => const ActivityScreen()),
+      GoRoute(path: AppRoutes.search, builder: (context, state) => const SearchScreen()),
+      GoRoute(
+        path: AppRoutes.playlists,
+        builder: (context, state) => PlaylistsScreen(userId: (state.extra as Map?)?['userId'] as String?),
+      ),
+      GoRoute(
+        path: '${AppRoutes.playlists}/:playlistId',
+        builder: (context, state) => PlaylistDetailScreen(playlistId: state.pathParameters['playlistId']!),
+      ),
+      GoRoute(
+        path: '${AppRoutes.followers}/:userId',
+        builder: (context, state) => FollowersScreen(userId: state.pathParameters['userId']!),
+      ),
+      GoRoute(path: AppRoutes.suggestedAccounts, builder: (context, state) => const SuggestedAccountsScreen()),
+      GoRoute(
+        path: '${AppRoutes.duetCreate}/:sourceVideoId',
+        builder: (context, state) => DuetCreateScreen(sourceVideoId: state.pathParameters['sourceVideoId']!),
+      ),
+      GoRoute(
+        path: '${AppRoutes.stitchCreate}/:sourceVideoId',
+        builder: (context, state) => StitchCreateScreen(sourceVideoId: state.pathParameters['sourceVideoId']!),
+      ),
       GoRoute(
         path: '${AppRoutes.incomingCall}/:callId',
         builder: (context, state) => IncomingCallScreen(

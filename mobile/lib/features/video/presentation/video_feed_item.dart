@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../../core/config/app_config.dart';
+import '../../../core/router/app_router.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/video_model.dart';
+import 'add_yours_response_screen.dart';
+import 'add_yours_responses_screen.dart';
 import 'comment_sheet.dart';
 import 'feed_controller.dart';
 import 'video_providers.dart';
@@ -216,6 +219,8 @@ class _VideoActionRail extends ConsumerWidget {
     final controller = ref.read(controllerProvider.notifier);
     final liked = video.likedByMe ?? false;
     final following = video.isFollowedByMe ?? false;
+    final favorited = video.favoritedByMe;
+    final reposted = video.repostedByMe;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -240,6 +245,18 @@ class _VideoActionRail extends ConsumerWidget {
         ),
         const SizedBox(height: 20),
         _RailButton(
+          icon: favorited ? Icons.bookmark : Icons.bookmark_border,
+          color: favorited ? Colors.amberAccent : Colors.white,
+          onTap: () => controller.toggleFavorite(video),
+        ),
+        const SizedBox(height: 20),
+        _RailButton(
+          icon: Icons.repeat,
+          color: reposted ? Colors.greenAccent : Colors.white,
+          onTap: () => controller.toggleRepost(video),
+        ),
+        const SizedBox(height: 20),
+        _RailButton(
           icon: Icons.reply,
           label: '${video.shareCount}',
           onTap: () async {
@@ -256,7 +273,83 @@ class _VideoActionRail extends ConsumerWidget {
             }
           },
         ),
+        if (video.allowDuet || video.allowStitch || video.addYoursPrompt != null) ...[
+          const SizedBox(height: 20),
+          _RailButton(
+            icon: Icons.more_horiz,
+            onTap: () => _showReuseMenu(context, ref, video),
+          ),
+        ],
       ],
+    );
+  }
+
+  void _showReuseMenu(BuildContext context, WidgetRef ref, VideoModel video) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (video.allowDuet)
+              ListTile(
+                leading: const Icon(Icons.people_outline),
+                title: const Text('Duet'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  context.pushDuetCreate(video.id);
+                },
+              ),
+            if (video.allowStitch)
+              ListTile(
+                leading: const Icon(Icons.content_cut),
+                title: const Text('Stitch'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  context.pushStitchCreate(video.id);
+                },
+              ),
+            if (video.addYoursPrompt != null) ...[
+              ListTile(
+                leading: const Icon(Icons.auto_awesome),
+                title: const Text('Add Yours'),
+                subtitle: Text(video.addYoursPrompt!, maxLines: 1, overflow: TextOverflow.ellipsis),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => AddYoursResponseScreen(promptVideoId: video.id, prompt: video.addYoursPrompt!)),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.grid_view_outlined),
+                title: const Text('View responses'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => AddYoursResponsesScreen(promptVideoId: video.id)),
+                  );
+                },
+              ),
+            ],
+            ListTile(
+              leading: const Icon(Icons.music_note_outlined),
+              title: const Text('Use this sound'),
+              onTap: () async {
+                Navigator.of(context).pop();
+                try {
+                  final soundId = await ref.read(videoRepositoryProvider).useSound(video.id);
+                  if (context.mounted) context.pushUploadVideo(soundId: soundId);
+                } catch (_) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not use this sound right now')));
+                  }
+                }
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -3,7 +3,13 @@ import { unlink } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 
-import { generateThumbnail, probeVideo, transcodeToPlaybackMp4 } from '@/lib/ffmpeg';
+import {
+  compositeDuetSideBySide,
+  compositeStitchConcat,
+  generateThumbnail,
+  probeVideo,
+  transcodeToPlaybackMp4,
+} from '@/lib/ffmpeg';
 import { logger } from '@/lib/logger';
 import { prisma } from '@/lib/prisma';
 import { storage, videoPlaybackKey, videoThumbnailKey } from '@/lib/storage';
@@ -20,22 +26,46 @@ async function cleanupQuietly(...filePaths: string[]): Promise<void> {
 }
 
 async function runProcessingAttempt(videoId: string, originalKey: string): Promise<void> {
+  const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
   const original = await storage.getLocalReadPath(originalKey);
   const thumbnailTemp = tempFilePath('.jpg');
-  const playbackTemp = tempFilePath('.mp4');
+  // The final encoded output — either a plain transcode of `original`, or
+  // the composited Duet/Stitch result, which is already final-format.
+  const finalTemp = tempFilePath('.mp4');
+  let sourceLocal: Awaited<ReturnType<typeof storage.getLocalReadPath>> | null = null;
 
   try {
-    const probe = await probeVideo(original.path);
+    if (video.duetOfVideoId) {
+      // A Duet (brief E) composites the source's existing playback file
+      // with the newly uploaded recording — never the source's original
+      // upload, which may not even still exist once it's PROCESSING-only.
+      const source = await prisma.video.findUniqueOrThrow({ where: { id: video.duetOfVideoId } });
+      if (!source.playbackKey) {
+        throw new Error('Duet source video has no playback file');
+      }
+      sourceLocal = await storage.getLocalReadPath(source.playbackKey);
+      await compositeDuetSideBySide(sourceLocal.path, original.path, finalTemp);
+    } else if (video.stitchOfVideoId && video.stitchSourceStartMs !== null && video.stitchSourceEndMs !== null) {
+      const source = await prisma.video.findUniqueOrThrow({ where: { id: video.stitchOfVideoId } });
+      if (!source.playbackKey) {
+        throw new Error('Stitch source video has no playback file');
+      }
+      sourceLocal = await storage.getLocalReadPath(source.playbackKey);
+      await compositeStitchConcat(sourceLocal.path, video.stitchSourceStartMs, video.stitchSourceEndMs, original.path, finalTemp);
+    } else {
+      await transcodeToPlaybackMp4(original.path, finalTemp);
+    }
+
+    const probe = await probeVideo(finalTemp);
 
     // Capture the thumbnail at 1s in, or halfway through very short clips —
     // never past the end of the video.
     const thumbnailAtSeconds = Math.min(1, probe.durationMs / 2000);
-    await generateThumbnail(original.path, thumbnailTemp, thumbnailAtSeconds);
-    await transcodeToPlaybackMp4(original.path, playbackTemp);
+    await generateThumbnail(finalTemp, thumbnailTemp, thumbnailAtSeconds);
 
     const playbackKey = videoPlaybackKey(videoId);
     const thumbnailKey = videoThumbnailKey(videoId);
-    await storage.putFromLocalPath(playbackKey, playbackTemp);
+    await storage.putFromLocalPath(playbackKey, finalTemp);
     await storage.putFromLocalPath(thumbnailKey, thumbnailTemp);
 
     await prisma.video.update({
@@ -52,9 +82,10 @@ async function runProcessingAttempt(videoId: string, originalKey: string): Promi
     });
   } finally {
     await original.cleanup();
+    await sourceLocal?.cleanup();
     // putFromLocalPath moves (renames) its source on success, so only a
     // failed attempt (thrown before the move) leaves these temp files behind.
-    await cleanupQuietly(thumbnailTemp, playbackTemp);
+    await cleanupQuietly(thumbnailTemp, finalTemp);
   }
 }
 

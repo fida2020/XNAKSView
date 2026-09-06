@@ -130,6 +130,34 @@ class FeedController extends StateNotifier<FeedState> {
     }
   }
 
+  Future<void> toggleRepost(VideoModel video) async {
+    final wasReposted = video.repostedByMe;
+    _replaceVideo(video.id, (v) => v.copyWith(repostedByMe: !wasReposted));
+    try {
+      if (wasReposted) {
+        await _repository.undoRepost(video.id);
+      } else {
+        await _repository.repost(video.id);
+      }
+    } on AppException {
+      _replaceVideo(video.id, (v) => v.copyWith(repostedByMe: wasReposted));
+    }
+  }
+
+  Future<void> toggleFavorite(VideoModel video) async {
+    final wasFavorited = video.favoritedByMe;
+    _replaceVideo(video.id, (v) => v.copyWith(favoritedByMe: !wasFavorited));
+    try {
+      if (wasFavorited) {
+        await _repository.unfavorite(video.id);
+      } else {
+        await _repository.favorite(video.id);
+      }
+    } on AppException {
+      _replaceVideo(video.id, (v) => v.copyWith(favoritedByMe: wasFavorited));
+    }
+  }
+
   void applyCommentAdded(String videoId) {
     _replaceVideo(videoId, (v) => v.copyWith(commentCount: v.commentCount + 1));
   }
@@ -161,4 +189,19 @@ final feedControllerProvider = StateNotifierProvider<FeedController, FeedState>(
 final userVideosControllerProvider = StateNotifierProvider.family<FeedController, FeedState, String>((ref, userId) {
   final repository = ref.watch(videoRepositoryProvider);
   return FeedController(repository, ({cursor}) => repository.fetchUserVideos(userId, cursor: cursor));
+});
+
+final hashtagVideosControllerProvider = StateNotifierProvider.family<FeedController, FeedState, String>((ref, tag) {
+  final repository = ref.watch(videoRepositoryProvider);
+  return FeedController(repository, ({cursor}) => repository.fetchHashtagVideos(tag, cursor: cursor));
+});
+
+final searchVideosControllerProvider = StateNotifierProvider.family<FeedController, FeedState, String>((ref, query) {
+  final repository = ref.watch(videoRepositoryProvider);
+  return FeedController(repository, ({cursor}) => repository.searchVideos(query));
+});
+
+final addYoursResponsesControllerProvider = StateNotifierProvider.family<FeedController, FeedState, String>((ref, promptVideoId) {
+  final repository = ref.watch(videoRepositoryProvider);
+  return FeedController(repository, ({cursor}) => repository.fetchAddYoursResponses(promptVideoId, cursor: cursor));
 });

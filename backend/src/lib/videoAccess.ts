@@ -49,6 +49,20 @@ export async function fetchFollowingIds(followerId: string, targetIds: string[])
   return new Set(follows.map((follow) => follow.followingId));
 }
 
+/** Batch "did I repost each of these videos" lookup — the authenticated user's real state, not client-side-only, so it survives a reload/re-login. */
+export async function fetchRepostedVideoIds(userId: string, videoIds: string[]): Promise<Set<string>> {
+  if (videoIds.length === 0) return new Set();
+  const reposts = await prisma.repost.findMany({ where: { userId, videoId: { in: videoIds } }, select: { videoId: true } });
+  return new Set(reposts.map((r) => r.videoId));
+}
+
+/** Batch "did I favorite each of these videos" lookup — same real-state posture as `fetchRepostedVideoIds`. */
+export async function fetchFavoritedVideoIds(userId: string, videoIds: string[]): Promise<Set<string>> {
+  if (videoIds.length === 0) return new Set();
+  const favorites = await prisma.favorite.findMany({ where: { userId, videoId: { in: videoIds } }, select: { videoId: true } });
+  return new Set(favorites.map((f) => f.videoId));
+}
+
 /** A video is visible to anyone only once it's finished processing and is public — its owner can always see it. */
 export function canViewVideo(video: Pick<Video, 'userId' | 'status' | 'visibility'>, requesterId: string): boolean {
   if (video.userId === requesterId) return true;
@@ -59,11 +73,13 @@ interface SerializeVideoExtras {
   likedByMe?: boolean;
   author?: AuthorSummary;
   isFollowedByMe?: boolean;
+  repostedByMe?: boolean;
+  favoritedByMe?: boolean;
 }
 
 /** Fields left `undefined` (not e.g. `false`/`null`) when the caller hasn't looked them up, so callers that skip that lookup don't accidentally imply a value. */
 export function serializeVideo(video: Video, extras: SerializeVideoExtras = {}) {
-  const { likedByMe, author, isFollowedByMe } = extras;
+  const { likedByMe, author, isFollowedByMe, repostedByMe, favoritedByMe } = extras;
   return {
     id: video.id,
     userId: video.userId,
@@ -80,9 +96,19 @@ export function serializeVideo(video: Video, extras: SerializeVideoExtras = {}) 
     commentCount: video.commentCount,
     viewCount: video.viewCount,
     shareCount: video.shareCount,
+    allowDuet: video.allowDuet,
+    allowStitch: video.allowStitch,
+    allowDownload: video.allowDownload,
+    duetOfVideoId: video.duetOfVideoId,
+    stitchOfVideoId: video.stitchOfVideoId,
+    addYoursPrompt: video.addYoursPrompt,
+    addYoursOfVideoId: video.addYoursOfVideoId,
+    soundId: video.soundId,
     likedByMe,
     author,
     isFollowedByMe,
+    repostedByMe,
+    favoritedByMe,
     createdAt: video.createdAt,
     updatedAt: video.updatedAt,
   };

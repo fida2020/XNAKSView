@@ -578,3 +578,78 @@ adminRouter.get(
     }
   },
 );
+
+// -----------------------------------------------------------------------
+// Step 6: comment reports + creator playlists (read-only inspection, same
+// requireAdmin gate applied router-wide above)
+// -----------------------------------------------------------------------
+
+adminRouter.get(
+  '/admin/comment-reports',
+  validate({ query: adminListReportsQuerySchema }),
+  async (req, res, next) => {
+    try {
+      const { cursor, limit, status } = req.query as unknown as { cursor?: string; limit: number; status?: string };
+      const decoded = decodeReportCursor(cursor);
+
+      const reports = await prisma.videoCommentReport.findMany({
+        where: {
+          ...(status ? { status: status as never } : {}),
+          ...(decoded
+            ? { OR: [{ createdAt: { lt: new Date(decoded.createdAt) } }, { createdAt: new Date(decoded.createdAt), id: { lt: decoded.id } }] }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        include: {
+          comment: { select: { id: true, videoId: true, userId: true, text: true } },
+          reporter: { select: { id: true, email: true, phone: true } },
+        },
+      });
+
+      const { page, nextCursor } = paginateReports(reports, limit);
+      res.status(200).json({ reports: page, nextCursor });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminRouter.get(
+  '/admin/playlists',
+  validate({ query: adminListConversationsQuerySchema }),
+  async (req, res, next) => {
+    try {
+      const { cursor, limit } = req.query as unknown as { cursor?: string; limit: number };
+      const decoded = cursor ? decodeCursor(cursor) : null;
+      if (cursor && !decoded) {
+        throw new AppError('BAD_REQUEST', 'Invalid cursor');
+      }
+
+      const playlists = await prisma.creatorPlaylist.findMany({
+        where: decoded
+          ? { OR: [{ createdAt: { lt: new Date(decoded.createdAt) } }, { createdAt: new Date(decoded.createdAt), id: { lt: decoded.id } }] }
+          : {},
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        include: { user: { select: { id: true, email: true, phone: true, followerCount: true } }, _count: { select: { items: true } } },
+      });
+
+      const { page, nextCursor } = paginateReports(playlists, limit);
+      res.status(200).json({
+        playlists: page.map((p) => ({
+          id: p.id,
+          userId: p.userId,
+          account: p.user,
+          name: p.name,
+          itemCount: p._count.items,
+          viewCount: p.viewCount,
+          createdAt: p.createdAt,
+        })),
+        nextCursor,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);

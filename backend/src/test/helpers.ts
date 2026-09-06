@@ -83,11 +83,20 @@ export async function registerAdmin(overrides: Partial<Record<string, unknown>> 
 
 export async function uploadSampleVideo(
   accessToken: string,
-  overrides: { caption?: string; visibility?: 'PUBLIC' | 'PRIVATE' } = {},
+  overrides: {
+    caption?: string;
+    visibility?: 'PUBLIC' | 'PRIVATE';
+    allowDuet?: boolean;
+    allowStitch?: boolean;
+    allowDownload?: boolean;
+  } = {},
 ) {
   let req = request(app).post('/api/v1/videos').set('Authorization', `Bearer ${accessToken}`).attach('video', SAMPLE_VIDEO_PATH);
   if (overrides.caption !== undefined) req = req.field('caption', overrides.caption);
   if (overrides.visibility !== undefined) req = req.field('visibility', overrides.visibility);
+  if (overrides.allowDuet !== undefined) req = req.field('allowDuet', String(overrides.allowDuet));
+  if (overrides.allowStitch !== undefined) req = req.field('allowStitch', String(overrides.allowStitch));
+  if (overrides.allowDownload !== undefined) req = req.field('allowDownload', String(overrides.allowDownload));
   return req;
 }
 

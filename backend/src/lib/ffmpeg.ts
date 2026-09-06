@@ -164,3 +164,99 @@ export async function transcodeToPlaybackMp4(inputPath: string, outputPath: stri
     outputPath,
   ]);
 }
+
+/**
+ * Duet (brief E): current TikTok behavior composites the source video and
+ * the new recording side by side into a single output video, not two
+ * separately-playable tracks. Both sides are scaled to the same height
+ * (source's, capped at 1080) before being stacked horizontally; both
+ * audio tracks are mixed rather than dropping one, since current TikTok
+ * duets carry sound from both sides unless a participant explicitly mutes
+ * their side (no such per-side mute control exists yet — a reasonable,
+ * disclosed simplification). This is a generic ffmpeg filter graph, not
+ * anything copied from TikTok's own (proprietary, unavailable) compositor.
+ */
+export async function compositeDuetSideBySide(sourcePath: string, newPath: string, outputPath: string): Promise<void> {
+  const filter =
+    "[0:v]scale=-2:'min(1080,ih)',setsar=1[left];" +
+    "[1:v]scale=-2:'min(1080,ih)',setsar=1[right];" +
+    '[left][right]hstack=inputs=2[v];' +
+    '[0:a][1:a]amix=inputs=2:duration=shortest:dropout_transition=0[a]';
+  await runCommand(env.FFMPEG_PATH, [
+    '-y',
+    '-i',
+    sourcePath,
+    '-i',
+    newPath,
+    '-filter_complex',
+    filter,
+    '-map',
+    '[v]',
+    '-map',
+    '[a]',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'veryfast',
+    '-crf',
+    '23',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '128k',
+    '-shortest',
+    '-movflags',
+    '+faststart',
+    outputPath,
+  ]);
+}
+
+/**
+ * Stitch (brief F): current TikTok behavior lets the creator trim/select
+ * which up-to-5-second segment of the source plays, then cuts to the new
+ * recording full-screen — a concatenation, not a side-by-side composite.
+ * `startMs`/`endMs` are already server-validated (never trusted from the
+ * client beyond that validation) by the time this runs.
+ */
+export async function compositeStitchConcat(
+  sourcePath: string,
+  startMs: number,
+  endMs: number,
+  newPath: string,
+  outputPath: string,
+): Promise<void> {
+  const startSeconds = (startMs / 1000).toFixed(3);
+  const endSeconds = (endMs / 1000).toFixed(3);
+  const filter =
+    `[0:v]trim=start=${startSeconds}:end=${endSeconds},setpts=PTS-STARTPTS,scale='min(1080,iw)':-2[v0];` +
+    `[0:a]atrim=start=${startSeconds}:end=${endSeconds},asetpts=PTS-STARTPTS[a0];` +
+    "[1:v]scale='min(1080,iw)':-2,setpts=PTS-STARTPTS[v1];" +
+    '[1:a]asetpts=PTS-STARTPTS[a1];' +
+    '[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]';
+  await runCommand(env.FFMPEG_PATH, [
+    '-y',
+    '-i',
+    sourcePath,
+    '-i',
+    newPath,
+    '-filter_complex',
+    filter,
+    '-map',
+    '[v]',
+    '-map',
+    '[a]',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'veryfast',
+    '-crf',
+    '23',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '128k',
+    '-movflags',
+    '+faststart',
+    outputPath,
+  ]);
+}

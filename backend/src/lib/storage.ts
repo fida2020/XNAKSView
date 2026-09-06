@@ -149,3 +149,11 @@ export function voiceMessageKey(messageId: string, extension: string): string {
 export function videoThumbnailKey(videoId: string): string {
   return `videos/${videoId}/thumbnail.jpg`;
 }
+
+export function photoPostAssetKey(photoPostId: string, assetId: string, extension: string): string {
+  return `photo-posts/${photoPostId}/${assetId}${extension}`;
+}
+
+export function storyMediaKey(storyId: string, extension: string): string {
+  return `stories/${storyId}/media${extension}`;
+}

@@ -7,6 +7,14 @@ import { profileRouter } from '@/routes/v1/profile';
 import { videosRouter } from '@/routes/v1/videos';
 import { feedRouter } from '@/routes/v1/feed';
 import { followRouter } from '@/routes/v1/follow';
+import { hashtagsRouter } from '@/routes/v1/hashtags';
+import { searchRouter } from '@/routes/v1/search';
+import { activityRouter } from '@/routes/v1/activity';
+import { playlistsRouter } from '@/routes/v1/playlists';
+import { photoPostsRouter } from '@/routes/v1/photoPosts';
+import { textPostsRouter } from '@/routes/v1/textPosts';
+import { storiesRouter } from '@/routes/v1/stories';
+import { soundsRouter } from '@/routes/v1/sounds';
 import { liveEventsRouter } from '@/routes/v1/liveEvents';
 import { liveGuestsRouter } from '@/routes/v1/liveGuests';
 import { liveMatchesRouter } from '@/routes/v1/liveMatches';
@@ -27,6 +35,15 @@ v1Router.use(profileRouter);
 v1Router.use(videosRouter);
 v1Router.use(feedRouter);
 v1Router.use(followRouter);
+// Step 6 TikTok-parity social + creation features.
+v1Router.use(hashtagsRouter);
+v1Router.use(searchRouter);
+v1Router.use(activityRouter);
+v1Router.use(playlistsRouter);
+v1Router.use(photoPostsRouter);
+v1Router.use(textPostsRouter);
+v1Router.use(storiesRouter);
+v1Router.use(soundsRouter);
 // More specific /live/* paths (events, matches) must be registered before
 // liveRouter's `GET /live/:id` — otherwise `:id` would greedily swallow
 // literal segments like "events" or "matches".

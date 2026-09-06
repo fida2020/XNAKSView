@@ -126,6 +126,32 @@ model User {
   callsReceived       Call[]                    @relation("CallsAsCallee")
   callReports         CallReport[]
 
+  mentionsMade     Mention[]              @relation("MentionsMade")
+  mentionsReceived Mention[]              @relation("MentionsReceived")
+  reposts          Repost[]
+  favorites        Favorite[]
+  commentLikes     VideoCommentLike[]
+  commentReports   VideoCommentReport[]
+  activityReceived ActivityNotification[] @relation("ActivityRecipient")
+  activitySent     ActivityNotification[] @relation("ActivityActor")
+  recentSearches   RecentSearch[]
+  creatorPlaylists CreatorPlaylist[]
+
+  photoPosts        PhotoPost[]
+  photoPostLikes    PhotoPostLike[]
+  photoPostComments PhotoPostComment[]
+  photoPostReports  PhotoPostReport[]
+
+  textPosts        TextPost[]
+  textPostLikes    TextPostLike[]
+  textPostComments TextPostComment[]
+  textPostReports  TextPostReport[]
+
+  stories      Story[]
+  storyViews   StoryView[]
+  storyReplies StoryReply[]
+  storyReports StoryReport[]
+
   @@index([status])
   @@map("users")
 }
@@ -271,6 +297,45 @@ model Video {
   visibility      VideoVisibility @default(PUBLIC)
   processingError String?
 
+  // Creator-controlled content-reuse permissions (Step 6) — checked
+  // server-side on every Duet/Stitch/download attempt, never trusted from
+  // the client. Default true matches TikTok's default-on posture.
+  allowDuet     Boolean @default(true)
+  allowStitch   Boolean @default(true)
+  allowDownload Boolean @default(true)
+
+  // Duet/Stitch lineage — a Duet/Stitch is an ordinary Video row that also
+  // points back at the video it was made from, rather than a separate
+  // content type. `onDelete: SetNull` so deleting the source doesn't
+  // cascade-delete every Duet/Stitch made from it (source-deletion
+  // handling, brief D/E) — the derived video just loses its back-link.
+  duetOfVideoId String?
+  duetOfVideo   Video?  @relation("VideoDuets", fields: [duetOfVideoId], references: [id], onDelete: SetNull)
+  duets         Video[] @relation("VideoDuets")
+
+  stitchOfVideoId     String?
+  stitchOfVideo       Video?  @relation("VideoStitches", fields: [stitchOfVideoId], references: [id], onDelete: SetNull)
+  stitches            Video[] @relation("VideoStitches")
+  stitchSourceStartMs Int?
+  stitchSourceEndMs   Int?
+
+  // Add Yours (brief G) — a video that carries a prompt (e.g. "your
+  // favorite summer memory") that other users respond to with their own
+  // video. Same lineage shape as Duet/Stitch: the response just points back
+  // at the prompt video, it isn't a separate content type.
+  addYoursPrompt    String?
+  addYoursOfVideoId String?
+  addYoursOfVideo   Video?  @relation("VideoAddYours", fields: [addYoursOfVideoId], references: [id], onDelete: SetNull)
+  addYoursResponses Video[] @relation("VideoAddYours")
+
+  // Sounds foundation (brief C) — every video's own audio is implicitly a
+  // usable Sound (extracted lazily, see lib/sounds.ts); `soundId` records
+  // which Sound this video was actually posted with (its own, or someone
+  // else's) for the "use this sound" flow and the sound's usage count.
+  soundId  String?
+  sound    Sound?  @relation("VideosUsingSound", fields: [soundId], references: [id], onDelete: SetNull)
+  ownSound Sound?  @relation("SoundSource")
+
   // Denormalized counters, maintained transactionally with their owning
   // rows (VideoLike, VideoComment, VideoView) or incremented directly
   // (shares have no dedicated table — see docs/STEP3_PROGRESS.md) so the
@@ -288,8 +353,19 @@ model Video {
   views    VideoView[]
   reports  VideoReport[]
 
+  hashtags              VideoHashtag[]
+  mentions              Mention[]
+  reposts               Repost[]
+  favorites             Favorite[]
+  playlistItems         CreatorPlaylistItem[]
+  activityNotifications ActivityNotification[]
+
   @@index([userId, status, createdAt])
   @@index([status, visibility, createdAt])
+  @@index([duetOfVideoId])
+  @@index([stitchOfVideoId])
+  @@index([addYoursOfVideoId])
+  @@index([soundId])
   @@map("videos")
 }
 
@@ -318,11 +394,69 @@ model VideoComment {
 
   text String
 
+  // One level of replies only (matching current TikTok behavior — a reply
+  // cannot itself be replied to as a further-nested thread); enforced in
+  // routes/v1/videos.ts, not just by this relation shape.
+  parentId String?
+  parent   VideoComment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  VideoComment[] @relation("CommentReplies")
+
+  // Denormalized so the comment list and detail view never need a COUNT()
+  // aggregate, maintained transactionally alongside VideoCommentLike/reply
+  // creation — same pattern as Video's own like/comment/view/share counters.
+  likeCount  Int @default(0)
+  replyCount Int @default(0)
+
+  // Only the video owner may pin (checked in the route, not here); at most
+  // one pinned comment per video is enforced in the route, matching current
+  // TikTok behavior, not by a DB constraint (a second pin should replace
+  // the first, not fail).
+  pinnedAt DateTime?
+
   createdAt DateTime @default(now())
 
+  likes                VideoCommentLike[]
+  reports              VideoCommentReport[]
+  ActivityNotification ActivityNotification[]
+
   @@index([videoId, createdAt])
+  @@index([videoId, parentId, createdAt])
   @@index([userId])
   @@map("video_comments")
+}
+
+model VideoCommentLike {
+  id String @id @default(uuid())
+
+  commentId String
+  comment   VideoComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([commentId, userId])
+  @@index([userId])
+  @@map("video_comment_likes")
+}
+
+model VideoCommentReport {
+  id String @id @default(uuid())
+
+  commentId   String
+  comment     VideoComment      @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  reporterId  String
+  reporter    User              @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason      VideoReportReason
+  description String?
+  status      VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([commentId, reporterId])
+  @@index([commentId])
+  @@index([status])
+  @@map("video_comment_reports")
 }
 
 model VideoView {
@@ -1066,4 +1200,513 @@ model CallReport {
   @@index([callId])
   @@index([status])
   @@map("call_reports")
+}
+
+// ---------------------------------------------------------------------------
+// TikTok-parity social + creation features (Step 6)
+// ---------------------------------------------------------------------------
+
+// Normalized (lowercase, no leading #) so #XNAKView and #xnakview are the
+// same row — normalization happens in lib/hashtags.ts before any query or
+// write, never left to a DB collation trick.
+model Hashtag {
+  id        String   @id @default(uuid())
+  tag       String   @unique
+  postCount Int      @default(0)
+  createdAt DateTime @default(now())
+
+  videos     VideoHashtag[]
+  photoPosts PhotoPostHashtag[]
+  textPosts  TextPostHashtag[]
+
+  @@index([postCount])
+  @@map("hashtags")
+}
+
+model VideoHashtag {
+  id String @id @default(uuid())
+
+  videoId   String
+  video     Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  hashtagId String
+  hashtag   Hashtag @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([videoId, hashtagId])
+  @@index([hashtagId, createdAt])
+  @@map("video_hashtags")
+}
+
+// Extracted from a caption server-side at post time (lib/hashtags.ts) and
+// resolved against real usernames — never trusted from a client-supplied
+// user id list, so a mention can only ever target an account that actually
+// has that username.
+model Mention {
+  id String @id @default(uuid())
+
+  videoId         String
+  video           Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  mentionedUserId String
+  mentionedUser   User   @relation("MentionsReceived", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  mentionedById   String
+  mentionedBy     User   @relation("MentionsMade", fields: [mentionedById], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([videoId, mentionedUserId])
+  @@index([mentionedUserId, createdAt])
+  @@map("mentions")
+}
+
+// References the original video, never duplicates the media (brief H).
+model Repost {
+  id String @id @default(uuid())
+
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId String
+  video   Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, videoId])
+  @@index([userId, createdAt])
+  @@index([videoId])
+  @@map("reposts")
+}
+
+// TikTok's "Favorites" (brief I) — private by default and, today, the only
+// visibility this has: there is no sharing/public-favorites surface.
+model Favorite {
+  id String @id @default(uuid())
+
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId String
+  video   Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, videoId])
+  @@index([userId, createdAt])
+  @@map("favorites")
+}
+
+enum ActivityType {
+  LIKE
+  COMMENT
+  COMMENT_LIKE
+  COMMENT_REPLY
+  FOLLOW
+  MENTION
+  REPOST
+}
+
+// The persisted in-app Activity tab (brief O) — distinct from
+// lib/notifications.ts's NotificationDispatcher, which is an ephemeral
+// "ring/message right now" push onto the realtime gateway for messages and
+// calls. This is a durable, paginated, read/unread log of social activity.
+model ActivityNotification {
+  id String @id @default(uuid())
+
+  recipientId String
+  recipient   User          @relation("ActivityRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  actorId     String
+  actor       User          @relation("ActivityActor", fields: [actorId], references: [id], onDelete: Cascade)
+  type        ActivityType
+  videoId     String?
+  video       Video?        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  commentId   String?
+  comment     VideoComment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([recipientId, createdAt])
+  @@index([recipientId, readAt])
+  @@map("activity_notifications")
+}
+
+// One row per (user, query) — a repeat search bumps createdAt via upsert
+// rather than growing an unbounded history of duplicates.
+model RecentSearch {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  query  String
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, query])
+  @@index([userId, createdAt])
+  @@map("recent_searches")
+}
+
+// Locked behind a follower-count gate (see env.CREATOR_PLAYLIST_MIN_FOLLOWERS,
+// default 5000) enforced in routes/v1/playlists.ts — never by hiding the
+// button client-side. Falling back below the threshold later preserves
+// existing playlists (brief N's explicit downgrade policy); only creating
+// new ones / adding videos is re-gated.
+model CreatorPlaylist {
+  id String @id @default(uuid())
+
+  userId      String
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  coverKey    String?
+  viewCount   Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items CreatorPlaylistItem[]
+
+  @@index([userId, createdAt])
+  @@map("creator_playlists")
+}
+
+model CreatorPlaylistItem {
+  id String @id @default(uuid())
+
+  playlistId String
+  playlist   CreatorPlaylist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  videoId    String
+  video      Video           @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  position   Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([playlistId, videoId])
+  @@unique([playlistId, position])
+  @@index([playlistId, position])
+  @@map("creator_playlist_items")
+}
+
+// ---------------------------------------------------------------------------
+// Sounds foundation (Step 6, brief C) — never a bundled copyrighted catalog.
+// Every video's own audio is implicitly usable as a Sound; a Sound row only
+// gets created lazily the first time it's actually reused by a second video
+// (see lib/sounds.ts) or browsed as a page, not eagerly for every upload.
+// ---------------------------------------------------------------------------
+
+model Sound {
+  id String @id @default(uuid())
+
+  // The video this audio was originally extracted from — attribution
+  // (brief C) always traces back here, never to whoever most recently used it.
+  sourceVideoId String @unique
+  sourceVideo   Video  @relation("SoundSource", fields: [sourceVideoId], references: [id], onDelete: Cascade)
+
+  title      String?
+  usageCount Int      @default(1)
+  createdAt  DateTime @default(now())
+
+  usedByVideos Video[] @relation("VideosUsingSound")
+
+  @@index([usageCount])
+  @@map("sounds")
+}
+
+// ---------------------------------------------------------------------------
+// Photo posts / carousels (Step 6, brief A) — 2-35 swipeable images
+// (TikTok's current Photo Mode), a separate content type from Video rather
+// than a Video with an image "playback" — no transcoding pipeline applies,
+// so it doesn't share Video's PROCESSING/FAILED lifecycle. Comments here are
+// intentionally flat (no reply/pin threading) — a bounded v1 of the
+// engagement surface Video already has in full; see docs/STEP6_PROGRESS.md.
+// ---------------------------------------------------------------------------
+
+model PhotoPost {
+  id String @id @default(uuid())
+
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  caption       String?
+  visibility    VideoVisibility @default(PUBLIC)
+  allowDownload Boolean         @default(true)
+
+  likeCount    Int @default(0)
+  commentCount Int @default(0)
+  viewCount    Int @default(0)
+  shareCount   Int @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  photos   PhotoPostAsset[]
+  likes    PhotoPostLike[]
+  comments PhotoPostComment[]
+  reports  PhotoPostReport[]
+  hashtags PhotoPostHashtag[]
+
+  @@index([userId, createdAt])
+  @@index([visibility, createdAt])
+  @@map("photo_posts")
+}
+
+model PhotoPostAsset {
+  id String @id @default(uuid())
+
+  photoPostId String
+  photoPost   PhotoPost @relation(fields: [photoPostId], references: [id], onDelete: Cascade)
+  key         String
+  position    Int
+
+  @@unique([photoPostId, position])
+  @@map("photo_post_assets")
+}
+
+model PhotoPostLike {
+  id String @id @default(uuid())
+
+  photoPostId String
+  photoPost   PhotoPost @relation(fields: [photoPostId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([photoPostId, userId])
+  @@index([userId])
+  @@map("photo_post_likes")
+}
+
+model PhotoPostComment {
+  id String @id @default(uuid())
+
+  photoPostId String
+  photoPost   PhotoPost @relation(fields: [photoPostId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  text        String
+
+  createdAt DateTime @default(now())
+
+  @@index([photoPostId, createdAt])
+  @@map("photo_post_comments")
+}
+
+model PhotoPostReport {
+  id String @id @default(uuid())
+
+  photoPostId String
+  photoPost   PhotoPost         @relation(fields: [photoPostId], references: [id], onDelete: Cascade)
+  reporterId  String
+  reporter    User              @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason      VideoReportReason
+  description String?
+  status      VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([photoPostId, reporterId])
+  @@index([status])
+  @@map("photo_post_reports")
+}
+
+model PhotoPostHashtag {
+  id String @id @default(uuid())
+
+  photoPostId String
+  photoPost   PhotoPost @relation(fields: [photoPostId], references: [id], onDelete: Cascade)
+  hashtagId   String
+  hashtag     Hashtag   @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([photoPostId, hashtagId])
+  @@index([hashtagId, createdAt])
+  @@map("photo_post_hashtags")
+}
+
+// ---------------------------------------------------------------------------
+// Text posts (Step 6, brief B) — same bounded engagement posture as
+// PhotoPost above (flat comments, no reply/pin).
+// ---------------------------------------------------------------------------
+
+model TextPost {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  text   String
+
+  // A named preset (e.g. "gradient-1"), never free-form styling data —
+  // matches "do not store presentation-only client data unnecessarily"
+  // (brief §3) while still letting the client render a background.
+  backgroundStyle String?
+  visibility      VideoVisibility @default(PUBLIC)
+
+  likeCount    Int @default(0)
+  commentCount Int @default(0)
+  viewCount    Int @default(0)
+  shareCount   Int @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  likes    TextPostLike[]
+  comments TextPostComment[]
+  reports  TextPostReport[]
+  hashtags TextPostHashtag[]
+
+  @@index([userId, createdAt])
+  @@index([visibility, createdAt])
+  @@map("text_posts")
+}
+
+model TextPostLike {
+  id String @id @default(uuid())
+
+  textPostId String
+  textPost   TextPost @relation(fields: [textPostId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([textPostId, userId])
+  @@index([userId])
+  @@map("text_post_likes")
+}
+
+model TextPostComment {
+  id String @id @default(uuid())
+
+  textPostId String
+  textPost   TextPost @relation(fields: [textPostId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  text       String
+
+  createdAt DateTime @default(now())
+
+  @@index([textPostId, createdAt])
+  @@map("text_post_comments")
+}
+
+model TextPostReport {
+  id String @id @default(uuid())
+
+  textPostId  String
+  textPost    TextPost          @relation(fields: [textPostId], references: [id], onDelete: Cascade)
+  reporterId  String
+  reporter    User              @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason      VideoReportReason
+  description String?
+  status      VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([textPostId, reporterId])
+  @@index([status])
+  @@map("text_post_reports")
+}
+
+model TextPostHashtag {
+  id String @id @default(uuid())
+
+  textPostId String
+  textPost   TextPost @relation(fields: [textPostId], references: [id], onDelete: Cascade)
+  hashtagId  String
+  hashtag    Hashtag  @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([textPostId, hashtagId])
+  @@index([hashtagId, createdAt])
+  @@map("text_post_hashtags")
+}
+
+// ---------------------------------------------------------------------------
+// Stories (Step 6, brief D) — `expiresAt` is set once, at creation
+// (createdAt + 24h), and every read query filters on it server-side
+// (`expiresAt: { gt: now }`); the client's clock is never trusted for
+// expiration (brief's explicit "server/database must be authoritative"
+// requirement). Replies are comment-like and visible to the story owner —
+// current TikTok's actual mechanic (comments that disappear with the
+// story), not a Step 5 DM.
+// ---------------------------------------------------------------------------
+
+enum StoryMediaType {
+  PHOTO
+  VIDEO
+}
+
+model Story {
+  id String @id @default(uuid())
+
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaKey  String
+  mediaType StoryMediaType
+  caption   String?
+
+  viewCount  Int @default(0)
+  replyCount Int @default(0)
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  deletedAt DateTime?
+
+  views   StoryView[]
+  replies StoryReply[]
+  reports StoryReport[]
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("stories")
+}
+
+model StoryView {
+  id String @id @default(uuid())
+
+  storyId String
+  story   Story  @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([storyId, userId])
+  @@index([storyId])
+  @@map("story_views")
+}
+
+model StoryReply {
+  id String @id @default(uuid())
+
+  storyId String
+  story   Story  @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  text    String
+
+  createdAt DateTime @default(now())
+
+  @@index([storyId, createdAt])
+  @@map("story_replies")
+}
+
+model StoryReport {
+  id String @id @default(uuid())
+
+  storyId     String
+  story       Story             @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  reporterId  String
+  reporter    User              @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason      VideoReportReason
+  description String?
+  status      VideoReportStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([storyId, reporterId])
+  @@index([status])
+  @@map("story_reports")
 }

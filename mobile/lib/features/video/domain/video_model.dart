@@ -63,6 +63,13 @@ class VideoModel extends Equatable {
     required this.shareCount,
     this.likedByMe,
     this.isFollowedByMe,
+    this.repostedByMe = false,
+    this.favoritedByMe = false,
+    this.allowDuet = true,
+    this.allowStitch = true,
+    this.allowDownload = true,
+    this.addYoursPrompt,
+    this.soundId,
     this.author,
     required this.createdAt,
   });
@@ -86,6 +93,13 @@ class VideoModel extends Equatable {
       shareCount: json['shareCount'] as int,
       likedByMe: json['likedByMe'] as bool?,
       isFollowedByMe: json['isFollowedByMe'] as bool?,
+      repostedByMe: json['repostedByMe'] as bool? ?? false,
+      favoritedByMe: json['favoritedByMe'] as bool? ?? false,
+      allowDuet: json['allowDuet'] as bool? ?? true,
+      allowStitch: json['allowStitch'] as bool? ?? true,
+      allowDownload: json['allowDownload'] as bool? ?? true,
+      addYoursPrompt: json['addYoursPrompt'] as String?,
+      soundId: json['soundId'] as String?,
       author: json['author'] == null ? null : VideoAuthor.fromJson(json['author'] as Map<String, dynamic>),
       createdAt: DateTime.parse(json['createdAt'] as String),
     );
@@ -108,6 +122,13 @@ class VideoModel extends Equatable {
   final int shareCount;
   final bool? likedByMe;
   final bool? isFollowedByMe;
+  final bool repostedByMe;
+  final bool favoritedByMe;
+  final bool allowDuet;
+  final bool allowStitch;
+  final bool allowDownload;
+  final String? addYoursPrompt;
+  final String? soundId;
   final VideoAuthor? author;
   final DateTime createdAt;
 
@@ -117,6 +138,8 @@ class VideoModel extends Equatable {
     int? shareCount,
     bool? likedByMe,
     bool? isFollowedByMe,
+    bool? repostedByMe,
+    bool? favoritedByMe,
   }) {
     return VideoModel(
       id: id,
@@ -136,6 +159,13 @@ class VideoModel extends Equatable {
       shareCount: shareCount ?? this.shareCount,
       likedByMe: likedByMe ?? this.likedByMe,
       isFollowedByMe: isFollowedByMe ?? this.isFollowedByMe,
+      repostedByMe: repostedByMe ?? this.repostedByMe,
+      favoritedByMe: favoritedByMe ?? this.favoritedByMe,
+      allowDuet: allowDuet,
+      allowStitch: allowStitch,
+      allowDownload: allowDownload,
+      addYoursPrompt: addYoursPrompt,
+      soundId: soundId,
       author: author,
       createdAt: createdAt,
     );

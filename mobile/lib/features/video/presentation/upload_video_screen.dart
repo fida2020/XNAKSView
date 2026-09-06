@@ -12,7 +12,11 @@ import 'video_providers.dart';
 enum _UploadStage { pickingCaption, uploading, processing, done, failed }
 
 class UploadVideoScreen extends ConsumerStatefulWidget {
-  const UploadVideoScreen({super.key});
+  const UploadVideoScreen({super.key, this.initialSoundId});
+
+  /// Set when arriving via "Use this sound" (Step 6, brief C) — the new
+  /// video is posted with this Sound rather than materializing its own.
+  final String? initialSoundId;
 
   @override
   ConsumerState<UploadVideoScreen> createState() => _UploadVideoScreenState();
@@ -20,6 +24,7 @@ class UploadVideoScreen extends ConsumerStatefulWidget {
 
 class _UploadVideoScreenState extends ConsumerState<UploadVideoScreen> {
   final _captionController = TextEditingController();
+  final _addYoursPromptController = TextEditingController();
   File? _selectedFile;
   VideoVisibility _visibility = VideoVisibility.public;
   _UploadStage _stage = _UploadStage.pickingCaption;
@@ -49,6 +54,8 @@ class _UploadVideoScreenState extends ConsumerState<UploadVideoScreen> {
             file: file,
             caption: _captionController.text.trim(),
             visibility: _visibility,
+            addYoursPrompt: _addYoursPromptController.text.trim(),
+            soundId: widget.initialSoundId,
             onProgress: (progress) {
               if (mounted) setState(() => _uploadProgress = progress);
             },
@@ -110,6 +117,7 @@ class _UploadVideoScreenState extends ConsumerState<UploadVideoScreen> {
   @override
   void dispose() {
     _captionController.dispose();
+    _addYoursPromptController.dispose();
     super.dispose();
   }
 
@@ -167,12 +175,26 @@ class _UploadVideoScreenState extends ConsumerState<UploadVideoScreen> {
                   ),
           ),
         ),
+        if (widget.initialSoundId != null) ...[
+          const SizedBox(height: 8),
+          Row(children: const [Icon(Icons.music_note_outlined, size: 18), SizedBox(width: 4), Text('Using selected sound')]),
+        ],
         const SizedBox(height: 16),
         TextField(
           controller: _captionController,
           maxLength: 500,
           maxLines: 3,
           decoration: const InputDecoration(labelText: 'Caption (optional)', border: OutlineInputBorder()),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _addYoursPromptController,
+          maxLength: 150,
+          decoration: const InputDecoration(
+            labelText: 'Add Yours prompt (optional)',
+            hintText: 'e.g. your favorite summer memory',
+            border: OutlineInputBorder(),
+          ),
         ),
         const SizedBox(height: 8),
         SegmentedButton<VideoVisibility>(

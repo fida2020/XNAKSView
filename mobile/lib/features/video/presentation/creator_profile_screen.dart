@@ -3,8 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/config/app_config.dart';
 import '../../../core/errors/app_exception.dart';
+import '../../../core/router/app_router.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../photopost/presentation/photo_posts_list_screen.dart';
+import '../../textpost/presentation/text_posts_list_screen.dart';
 import '../domain/user_profile_summary.dart';
 import 'feed_controller.dart';
 import 'video_page_view.dart';
@@ -119,12 +122,38 @@ class _CreatorProfileScreenState extends ConsumerState<CreatorProfileScreen> {
             Text(profile.bio!, textAlign: TextAlign.center),
           ],
           const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          GestureDetector(
+            onTap: () => context.pushFollowers(profile.id),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _CountBlock(label: 'Followers', count: profile.followerCount),
+                const SizedBox(width: 32),
+                _CountBlock(label: 'Following', count: profile.followingCount),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
             children: [
-              _CountBlock(label: 'Followers', count: profile.followerCount),
-              const SizedBox(width: 32),
-              _CountBlock(label: 'Following', count: profile.followingCount),
+              OutlinedButton.icon(
+                onPressed: () => context.pushPlaylists(userId: profile.id),
+                icon: const Icon(Icons.playlist_play),
+                label: const Text('Playlists'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => PhotoPostsListScreen(userId: profile.id))),
+                icon: const Icon(Icons.photo_library_outlined),
+                label: const Text('Photos'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => TextPostsListScreen(userId: profile.id))),
+                icon: const Icon(Icons.text_fields),
+                label: const Text('Text'),
+              ),
             ],
           ),
           if (!profile.isSelf) ...[
@@ -135,6 +164,12 @@ class _CreatorProfileScreenState extends ConsumerState<CreatorProfileScreen> {
             ),
           ],
           if (profile.isSelf) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => context.pushSuggestedAccounts(),
+              icon: const Icon(Icons.person_search),
+              label: const Text('Discover people'),
+            ),
             const SizedBox(height: 12),
             OutlinedButton(
               onPressed: () => ref.read(authControllerProvider.notifier).signOut(),

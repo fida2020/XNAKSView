@@ -22,6 +22,8 @@ void showCommentSheet(
   );
 }
 
+const _reportReasons = ['SPAM', 'NUDITY_OR_SEXUAL_CONTENT', 'VIOLENCE', 'HARASSMENT_OR_BULLYING', 'HATE_SPEECH', 'MISINFORMATION', 'OTHER'];
+
 class _CommentSheet extends ConsumerStatefulWidget {
   const _CommentSheet({required this.video, required this.controllerProvider});
 
@@ -35,9 +37,15 @@ class _CommentSheet extends ConsumerStatefulWidget {
 class _CommentSheetState extends ConsumerState<_CommentSheet> {
   final _textController = TextEditingController();
   final List<CommentModel> _comments = [];
+  CommentModel? _pinned;
+  final Map<String, List<CommentModel>> _repliesByParent = {};
+  final Set<String> _expandedReplies = {};
+  String? _replyingToId;
   bool _isLoading = true;
   bool _isSubmitting = false;
   String? _error;
+
+  bool get _isVideoOwner => widget.video.userId == ref.read(authControllerProvider).userId;
 
   @override
   void initState() {
@@ -53,6 +61,7 @@ class _CommentSheetState extends ConsumerState<_CommentSheet> {
         _comments
           ..clear()
           ..addAll(page.comments);
+        _pinned = page.pinned;
         _isLoading = false;
       });
     } on AppException catch (error) {
@@ -69,18 +78,25 @@ class _CommentSheetState extends ConsumerState<_CommentSheet> {
     if (text.isEmpty || _isSubmitting) return;
 
     setState(() => _isSubmitting = true);
+    final parentId = _replyingToId;
     try {
-      final comment = await ref.read(videoRepositoryProvider).createComment(widget.video.id, text);
+      final comment = await ref.read(videoRepositoryProvider).createComment(widget.video.id, text, parentId: parentId);
       if (!mounted) return;
       setState(() {
-        _comments.insert(0, comment);
+        if (parentId != null) {
+          (_repliesByParent[parentId] ??= []).add(comment);
+          final idx = _comments.indexWhere((c) => c.id == parentId);
+          if (idx != -1) _comments[idx] = _comments[idx].copyWith(replyCount: _comments[idx].replyCount + 1);
+          _expandedReplies.add(parentId);
+        } else {
+          _comments.insert(0, comment);
+        }
         _textController.clear();
+        _replyingToId = null;
       });
       ref.read(widget.controllerProvider.notifier).applyCommentAdded(widget.video.id);
     } on AppException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -90,13 +106,94 @@ class _CommentSheetState extends ConsumerState<_CommentSheet> {
     try {
       await ref.read(videoRepositoryProvider).deleteComment(comment.id);
       if (!mounted) return;
-      setState(() => _comments.removeWhere((c) => c.id == comment.id));
+      setState(() {
+        _comments.removeWhere((c) => c.id == comment.id);
+        _repliesByParent[comment.parentId]?.removeWhere((c) => c.id == comment.id);
+        if (_pinned?.id == comment.id) _pinned = null;
+      });
       ref.read(widget.controllerProvider.notifier).applyCommentRemoved(widget.video.id);
     } on AppException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
     }
+  }
+
+  Future<void> _toggleLike(CommentModel comment) async {
+    final wasLiked = comment.likedByMe;
+    _replaceComment(comment.id, (c) => c.copyWith(likedByMe: !wasLiked, likeCount: c.likeCount + (wasLiked ? -1 : 1)));
+    try {
+      final repository = ref.read(videoRepositoryProvider);
+      if (wasLiked) {
+        await repository.unlikeComment(comment.id);
+      } else {
+        await repository.likeComment(comment.id);
+      }
+    } on AppException {
+      _replaceComment(comment.id, (c) => c.copyWith(likedByMe: wasLiked, likeCount: comment.likeCount));
+    }
+  }
+
+  Future<void> _togglePin(CommentModel comment) async {
+    final repository = ref.read(videoRepositoryProvider);
+    try {
+      if (_pinned?.id == comment.id) {
+        await repository.unpinComment(comment.id);
+        if (mounted) setState(() => _pinned = null);
+      } else {
+        await repository.pinComment(comment.id);
+        if (mounted) setState(() => _pinned = comment);
+      }
+    } on AppException catch (error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  Future<void> _report(CommentModel comment) async {
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final reason in _reportReasons)
+              ListTile(title: Text(reason.replaceAll('_', ' ')), onTap: () => Navigator.of(context).pop(reason)),
+          ],
+        ),
+      ),
+    );
+    if (reason == null) return;
+    try {
+      await ref.read(videoRepositoryProvider).reportComment(comment.id, reason: reason);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Reported. Thank you.')));
+    } on AppException catch (error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  Future<void> _toggleReplies(CommentModel comment) async {
+    if (_expandedReplies.contains(comment.id)) {
+      setState(() => _expandedReplies.remove(comment.id));
+      return;
+    }
+    setState(() => _expandedReplies.add(comment.id));
+    if (_repliesByParent.containsKey(comment.id)) return;
+    try {
+      final replies = await ref.read(videoRepositoryProvider).fetchReplies(comment.id);
+      if (mounted) setState(() => _repliesByParent[comment.id] = replies);
+    } on AppException {
+      // Leave collapsed-looking (empty) on failure rather than blocking the sheet.
+    }
+  }
+
+  void _replaceComment(String id, CommentModel Function(CommentModel) update) {
+    setState(() {
+      final topIdx = _comments.indexWhere((c) => c.id == id);
+      if (topIdx != -1) _comments[topIdx] = update(_comments[topIdx]);
+      if (_pinned?.id == id) _pinned = update(_pinned!);
+      for (final entry in _repliesByParent.entries) {
+        final idx = entry.value.indexWhere((c) => c.id == id);
+        if (idx != -1) entry.value[idx] = update(entry.value[idx]);
+      }
+    });
   }
 
   @override
@@ -110,9 +207,9 @@ class _CommentSheetState extends ConsumerState<_CommentSheet> {
     final currentUserId = ref.watch(authControllerProvider).userId;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.6,
+      initialChildSize: 0.7,
       minChildSize: 0.4,
-      maxChildSize: 0.9,
+      maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) {
         return Padding(
@@ -129,28 +226,29 @@ class _CommentSheetState extends ConsumerState<_CommentSheet> {
                     ? const Center(child: CircularProgressIndicator())
                     : _error != null
                         ? Center(child: Text(_error!))
-                        : _comments.isEmpty
+                        : (_comments.isEmpty && _pinned == null)
                             ? const Center(child: Text('No comments yet — be the first!'))
-                            : ListView.builder(
+                            : ListView(
                                 controller: scrollController,
-                                itemCount: _comments.length,
-                                itemBuilder: (context, index) {
-                                  final comment = _comments[index];
-                                  final isMine = comment.userId == currentUserId;
-                                  return ListTile(
-                                    title: Text(comment.authorLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                    subtitle: Text(comment.text),
-                                    trailing: isMine
-                                        ? IconButton(
-                                            icon: const Icon(Icons.delete_outline, size: 20),
-                                            onPressed: () => _delete(comment),
-                                          )
-                                        : null,
-                                  );
-                                },
+                                children: [
+                                  if (_pinned != null) _buildCommentTile(_pinned!, currentUserId, pinnedBadge: true),
+                                  for (final comment in _comments.where((c) => c.id != _pinned?.id))
+                                    _buildCommentWithReplies(comment, currentUserId),
+                                ],
                               ),
               ),
               const Divider(height: 1),
+              if (_replyingToId != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Row(
+                    children: [
+                      const Text('Replying…', style: TextStyle(fontStyle: FontStyle.italic)),
+                      const Spacer(),
+                      TextButton(onPressed: () => setState(() => _replyingToId = null), child: const Text('Cancel')),
+                    ],
+                  ),
+                ),
               SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.all(8.0),
@@ -177,6 +275,83 @@ class _CommentSheetState extends ConsumerState<_CommentSheet> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildCommentWithReplies(CommentModel comment, String? currentUserId) {
+    final replies = _repliesByParent[comment.id] ?? [];
+    final expanded = _expandedReplies.contains(comment.id);
+    return Column(
+      children: [
+        _buildCommentTile(comment, currentUserId),
+        if (comment.replyCount > 0)
+          Padding(
+            padding: const EdgeInsets.only(left: 56),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () => _toggleReplies(comment),
+                child: Text(expanded ? 'Hide replies' : 'View ${comment.replyCount} replies'),
+              ),
+            ),
+          ),
+        if (expanded)
+          for (final reply in replies)
+            Padding(padding: const EdgeInsets.only(left: 40), child: _buildCommentTile(reply, currentUserId)),
+      ],
+    );
+  }
+
+  Widget _buildCommentTile(CommentModel comment, String? currentUserId, {bool pinnedBadge = false}) {
+    final isMine = comment.userId == currentUserId;
+    return ListTile(
+      title: Row(
+        children: [
+          Flexible(child: Text(comment.authorLabel, style: const TextStyle(fontWeight: FontWeight.w600))),
+          if (pinnedBadge) ...[
+            const SizedBox(width: 6),
+            const Icon(Icons.push_pin, size: 14),
+          ],
+        ],
+      ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(comment.text),
+          Row(
+            children: [
+              TextButton(
+                onPressed: () => setState(() => _replyingToId = comment.id),
+                style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 32)),
+                child: const Text('Reply'),
+              ),
+              if (_isVideoOwner && comment.parentId == null)
+                TextButton(
+                  onPressed: () => _togglePin(comment),
+                  style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 32)),
+                  child: Text(pinnedBadge ? 'Unpin' : 'Pin'),
+                ),
+              TextButton(
+                onPressed: () => _report(comment),
+                style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 32)),
+                child: const Text('Report'),
+              ),
+            ],
+          ),
+        ],
+      ),
+      trailing: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: Icon(comment.likedByMe ? Icons.favorite : Icons.favorite_border, size: 18, color: comment.likedByMe ? Colors.red : null),
+            onPressed: () => _toggleLike(comment),
+          ),
+          if (comment.likeCount > 0) Text('${comment.likeCount}', style: const TextStyle(fontSize: 11)),
+          if (isMine)
+            IconButton(icon: const Icon(Icons.delete_outline, size: 18), onPressed: () => _delete(comment)),
+        ],
+      ),
     );
   }
 }

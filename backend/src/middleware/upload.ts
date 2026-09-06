@@ -53,6 +53,23 @@ const imageUpload = multer({
   },
 });
 
+// Stories (brief D) can be either a photo or a video, so this accepts both
+// — the actual declared `mediaType` is still cross-checked against the
+// file's real decoded content (probeImage/probeVideo) in routes/v1/stories.ts,
+// never trusted from either the mimetype or the field alone.
+const storyMediaUpload = multer({
+  storage: diskStorage,
+  limits: { fileSize: env.MAX_UPLOAD_BYTES },
+  fileFilter: (_req, file, callback) => {
+    const isObviouslyNotMedia = /^(text|audio)\//.test(file.mimetype) || file.mimetype === 'application/pdf';
+    if (isObviouslyNotMedia) {
+      callback(new AppError('BAD_REQUEST', `Unsupported file type: ${file.mimetype}`));
+      return;
+    }
+    callback(null, true);
+  },
+});
+
 const MAX_VOICE_MESSAGE_BYTES = 10 * 1024 * 1024;
 
 const audioUpload = multer({
@@ -68,7 +85,10 @@ const audioUpload = multer({
   },
 });
 
-function wrapUploadErrors(middleware: ReturnType<typeof multer.prototype.single>, maxBytes: number) {
+function wrapUploadErrors(
+  middleware: ReturnType<typeof multer.prototype.single> | ReturnType<typeof multer.prototype.array>,
+  maxBytes: number,
+) {
   return (req: Request, res: Response, next: NextFunction): void => {
     middleware(req, res, (error: unknown) => {
       if (!error) {
@@ -103,4 +123,14 @@ export function uploadSingleImage(fieldName: string) {
 /** Same shape again, sized and filtered for voice messages. */
 export function uploadSingleAudio(fieldName: string) {
   return wrapUploadErrors(audioUpload.single(fieldName), MAX_VOICE_MESSAGE_BYTES);
+}
+
+/** Photo Mode carousels (brief A): 2-35 images (TikTok's current range) under the same field name. */
+export function uploadMultipleImages(fieldName: string, maxCount: number) {
+  return wrapUploadErrors(imageUpload.array(fieldName, maxCount), MAX_IMAGE_BYTES);
+}
+
+/** Stories (brief D): either a photo or a video in the same field. */
+export function uploadSingleStoryMedia(fieldName: string) {
+  return wrapUploadErrors(storyMediaUpload.single(fieldName), env.MAX_UPLOAD_BYTES);
 }

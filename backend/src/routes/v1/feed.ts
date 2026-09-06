@@ -2,7 +2,14 @@ import { Router } from 'express';
 
 import { decodeCursor, encodeCursor } from '@/lib/pagination';
 import { prisma } from '@/lib/prisma';
-import { fetchAuthorSummaries, fetchFollowingIds, fetchLikedVideoIds, serializeVideo } from '@/lib/videoAccess';
+import {
+  fetchAuthorSummaries,
+  fetchFavoritedVideoIds,
+  fetchFollowingIds,
+  fetchLikedVideoIds,
+  fetchRepostedVideoIds,
+  serializeVideo,
+} from '@/lib/videoAccess';
 import { requireAuth } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
 import { feedQuerySchema } from '@/schemas/video.schema';
@@ -51,10 +58,12 @@ feedRouter.get('/feed', requireAuth, validate({ query: feedQuerySchema }), async
 
     const videoIds = page.map((video) => video.id);
     const authorIds = [...new Set(page.map((video) => video.userId))];
-    const [likedVideoIds, authors, followingIds] = await Promise.all([
+    const [likedVideoIds, authors, followingIds, repostedVideoIds, favoritedVideoIds] = await Promise.all([
       fetchLikedVideoIds(req.user!.id, videoIds),
       fetchAuthorSummaries(authorIds),
       fetchFollowingIds(req.user!.id, authorIds),
+      fetchRepostedVideoIds(req.user!.id, videoIds),
+      fetchFavoritedVideoIds(req.user!.id, videoIds),
     ]);
 
     res.status(200).json({
@@ -63,6 +72,8 @@ feedRouter.get('/feed', requireAuth, validate({ query: feedQuerySchema }), async
           likedByMe: likedVideoIds.has(video.id),
           author: authors.get(video.userId),
           isFollowedByMe: followingIds.has(video.userId),
+          repostedByMe: repostedVideoIds.has(video.id),
+          favoritedByMe: favoritedVideoIds.has(video.id),
         }),
       ),
       nextCursor,

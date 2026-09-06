@@ -54,6 +54,12 @@ const envSchema = z.object({
   // How long after sending a sender may unsend/delete a message. See
   // routes/v1/messages.ts.
   MESSAGE_UNSEND_WINDOW_MINUTES: z.coerce.number().int().positive().default(1440),
+
+  // Step 6: Creator Playlists unlock at this many followers, enforced
+  // server-side in routes/v1/playlists.ts. Centrally configurable so the
+  // threshold can change without a code change — the product default is
+  // 5000 and must not be hardcoded anywhere else.
+  CREATOR_PLAYLIST_MIN_FOLLOWERS: z.coerce.number().int().min(0).default(5000),
 });
 
 export type Env = z.infer<typeof envSchema>;
