@@ -26,14 +26,15 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- Required for LIVE streaming (Step 4) and voice/video calls + voice
+	<!-- Required for LIVE streaming (Step 4) and voice calls + voice
 	     messages (Step 5) — livekit_client and record both request these at
 	     runtime, but iOS hard-crashes the request (not just denies it) if the
-	     usage-description string is missing. -->
+	     usage-description string is missing. Camera is LIVE-only: 1:1 calls
+	     are voice-only. -->
 	<key>NSCameraUsageDescription</key>
-	<string>XNAKView needs camera access to go LIVE and make video calls.</string>
+	<string>XNAKView needs camera access to go LIVE.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>XNAKView needs microphone access for LIVE streaming, voice/video calls, and voice messages.</string>
+	<string>XNAKView needs microphone access for LIVE streaming, voice calls, and voice messages.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

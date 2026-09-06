@@ -15,7 +15,6 @@ export type NotificationType =
   | 'NEW_MESSAGE'
   | 'MESSAGE_REQUEST'
   | 'INCOMING_VOICE_CALL'
-  | 'INCOMING_VIDEO_CALL'
   | 'MISSED_CALL';
 
 export interface NotificationDispatcher {

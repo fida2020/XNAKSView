@@ -2,20 +2,8 @@ import 'package:equatable/equatable.dart';
 
 import '../../video/domain/video_model.dart' show VideoAuthor;
 
-enum CallType { voice, video, unknown }
 enum CallStatus { ringing, accepted, declined, busy, missed, ended, cancelled, failed, unknown }
 enum CallDirection { incoming, outgoing, unknown }
-
-CallType callTypeFromApi(String value) {
-  switch (value) {
-    case 'VOICE':
-      return CallType.voice;
-    case 'VIDEO':
-      return CallType.video;
-    default:
-      return CallType.unknown;
-  }
-}
 
 CallStatus _statusFromApi(String value) {
   switch (value) {
@@ -45,7 +33,6 @@ class CallModel extends Equatable {
     required this.id,
     required this.callerId,
     required this.calleeId,
-    required this.type,
     required this.status,
     required this.startedAt,
     this.answeredAt,
@@ -61,7 +48,6 @@ class CallModel extends Equatable {
       id: json['id'] as String,
       callerId: json['callerId'] as String,
       calleeId: json['calleeId'] as String,
-      type: callTypeFromApi(json['type'] as String),
       status: _statusFromApi(json['status'] as String),
       startedAt: DateTime.parse(json['startedAt'] as String),
       answeredAt: json['answeredAt'] == null ? null : DateTime.parse(json['answeredAt'] as String),
@@ -80,7 +66,6 @@ class CallModel extends Equatable {
   final String id;
   final String callerId;
   final String calleeId;
-  final CallType type;
   final CallStatus status;
   final DateTime startedAt;
   final DateTime? answeredAt;
@@ -91,7 +76,7 @@ class CallModel extends Equatable {
   final CallDirection direction;
 
   @override
-  List<Object?> get props => [id, callerId, calleeId, type, status, startedAt];
+  List<Object?> get props => [id, callerId, calleeId, status, startedAt];
 }
 
 class CallConnectionInfo extends Equatable {

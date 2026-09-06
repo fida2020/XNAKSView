@@ -1010,11 +1010,6 @@ model MessagingPrivacySettings {
   @@map("messaging_privacy_settings")
 }
 
-enum CallType {
-  VOICE
-  VIDEO
-}
-
 enum CallStatus {
   RINGING
   ACCEPTED
@@ -1034,7 +1029,6 @@ model Call {
   calleeId String
   callee   User   @relation("CallsAsCallee", fields: [calleeId], references: [id], onDelete: Cascade)
 
-  type   CallType
   status CallStatus @default(RINGING)
 
   // The LiveKit room backing this call's real WebRTC media — same

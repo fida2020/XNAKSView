@@ -6,24 +6,26 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../../core/errors/app_exception.dart';
 import 'messaging_providers.dart';
 
-/// An active 1:1 voice or video call — real WebRTC via the same self-hosted
-/// LiveKit server LIVE streaming uses (see routes/v1/calls.ts), not a fake
-/// HTTP or prerecorded call. Both participants publish and subscribe in the
-/// same room, unlike a LIVE session's host/viewer asymmetry.
+/// An active 1:1 voice call — real WebRTC via the same self-hosted LiveKit
+/// server LIVE streaming uses (see routes/v1/calls.ts), not a fake HTTP or
+/// prerecorded call. Both participants publish and subscribe in the same
+/// room, unlike a LIVE session's host/viewer asymmetry.
+///
+/// 1:1 video calling was permanently removed as a product decision (misuse/
+/// indecent-behavior risk) — this screen is voice-only. LIVE video
+/// (streaming, co-host/multi-guest, Match/Battle) is unrelated and unaffected.
 class CallScreen extends ConsumerStatefulWidget {
   const CallScreen({
     super.key,
     required this.callId,
     required this.token,
     required this.wsUrl,
-    required this.isVideo,
     this.otherUserName,
   });
 
   final String callId;
   final String token;
   final String wsUrl;
-  final bool isVideo;
   final String? otherUserName;
 
   @override
@@ -41,25 +43,15 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   bool _isEnding = false;
   String? _error;
   bool _micEnabled = true;
-  bool _cameraEnabled = true;
-  VideoTrack? _remoteVideoTrack;
 
   @override
   void initState() {
     super.initState();
-    _cameraEnabled = widget.isVideo;
     _room = Room();
     _listener = _room.createListener();
-    _listener!
-      ..on<RoomDisconnectedEvent>((_) {
-        if (mounted && !_isEnding) setState(() => _error = 'Call connection lost.');
-      })
-      ..on<TrackSubscribedEvent>((event) {
-        if (event.track is VideoTrack && mounted) setState(() => _remoteVideoTrack = event.track as VideoTrack);
-      })
-      ..on<TrackUnsubscribedEvent>((event) {
-        if (mounted && event.track == _remoteVideoTrack) setState(() => _remoteVideoTrack = null);
-      });
+    _listener!.on<RoomDisconnectedEvent>((_) {
+      if (mounted && !_isEnding) setState(() => _error = 'Call connection lost.');
+    });
 
     final realtime = ref.read(realtimeClientProvider);
     _stopListeningEnded = realtime.on('call:ended', (_) => _closeOnRemoteAction());
@@ -78,12 +70,10 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
   Future<void> _connect() async {
     await Permission.microphone.request();
-    if (widget.isVideo) await Permission.camera.request();
 
     try {
       await _room.connect(widget.wsUrl, widget.token);
       await _room.localParticipant?.setMicrophoneEnabled(true);
-      if (widget.isVideo) await _room.localParticipant?.setCameraEnabled(true);
       if (mounted) setState(() => _isConnecting = false);
     } catch (error) {
       if (mounted) setState(() { _isConnecting = false; _error = 'Failed to connect: $error'; });
@@ -94,25 +84,6 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     _micEnabled = !_micEnabled;
     await _room.localParticipant?.setMicrophoneEnabled(_micEnabled);
     setState(() {});
-  }
-
-  Future<void> _toggleCamera() async {
-    _cameraEnabled = !_cameraEnabled;
-    await _room.localParticipant?.setCameraEnabled(_cameraEnabled);
-    setState(() {});
-  }
-
-  Future<void> _flipCamera() async {
-    for (final pub in _room.localParticipant?.videoTrackPublications ?? const []) {
-      final track = pub.track;
-      final options = track is LocalVideoTrack ? track.currentOptions : null;
-      if (track is LocalVideoTrack && options is CameraCaptureOptions) {
-        await track.setCameraPosition(
-          options.cameraPosition == CameraPosition.front ? CameraPosition.back : CameraPosition.front,
-        );
-        return;
-      }
-    }
   }
 
   Future<void> _endCall() async {
@@ -151,18 +122,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         body: SafeArea(
           child: Stack(
             children: [
-              Positioned.fill(child: _buildRemoteView()),
-              if (widget.isVideo && !_isConnecting)
-                Positioned(
-                  top: 16,
-                  right: 16,
-                  width: 100,
-                  height: 140,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: _buildLocalPreview(),
-                  ),
-                ),
+              Positioned.fill(child: _buildCenterContent()),
               Positioned(
                 top: 16,
                 left: 16,
@@ -177,12 +137,6 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                   children: [
                     _CallControlButton(icon: _micEnabled ? Icons.mic : Icons.mic_off, onPressed: _toggleMic),
                     const SizedBox(width: 16),
-                    if (widget.isVideo) ...[
-                      _CallControlButton(icon: _cameraEnabled ? Icons.videocam : Icons.videocam_off, onPressed: _toggleCamera),
-                      const SizedBox(width: 16),
-                      _CallControlButton(icon: Icons.cameraswitch, onPressed: _flipCamera),
-                      const SizedBox(width: 16),
-                    ],
                     _CallControlButton(icon: Icons.call_end, color: Colors.red, onPressed: _endCall),
                   ],
                 ),
@@ -194,33 +148,21 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     );
   }
 
-  Widget _buildRemoteView() {
+  Widget _buildCenterContent() {
     if (_isConnecting) return const Center(child: CircularProgressIndicator(color: Colors.white));
     if (_error != null) {
       return Center(child: Text(_error!, style: const TextStyle(color: Colors.white), textAlign: TextAlign.center));
     }
-    if (!widget.isVideo || _remoteVideoTrack == null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircleAvatar(radius: 48, child: Icon(Icons.person, size: 48)),
-            const SizedBox(height: 12),
-            Text(widget.otherUserName ?? 'Connecting…', style: const TextStyle(color: Colors.white)),
-          ],
-        ),
-      );
-    }
-    return VideoTrackRenderer(_remoteVideoTrack!);
-  }
-
-  Widget _buildLocalPreview() {
-    for (final pub in _room.localParticipant?.videoTrackPublications ?? const []) {
-      if (pub.track is LocalVideoTrack) {
-        return VideoTrackRenderer(pub.track as LocalVideoTrack, mirrorMode: VideoViewMirrorMode.mirror);
-      }
-    }
-    return const ColoredBox(color: Colors.black54);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const CircleAvatar(radius: 48, child: Icon(Icons.person, size: 48)),
+          const SizedBox(height: 12),
+          Text(widget.otherUserName ?? 'Connecting…', style: const TextStyle(color: Colors.white)),
+        ],
+      ),
+    );
   }
 }
 

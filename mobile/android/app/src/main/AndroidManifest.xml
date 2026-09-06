@@ -3,9 +3,10 @@
          upload/playback, LIVE, chat, calls) — Android denies all networking
          without this, silently from the app's perspective (connection
          refused, not a permission-denied error).
-         CAMERA / RECORD_AUDIO / MODIFY_AUDIO_SETTINGS: LIVE streaming
-         (Step 4) and voice/video calls + voice messages (Step 5) via
-         livekit_client and record. -->
+         CAMERA: LIVE streaming only (Step 4) — 1:1 calls are voice-only, no
+         camera use. RECORD_AUDIO / MODIFY_AUDIO_SETTINGS: LIVE streaming
+         and voice calls + voice messages (Step 5) via livekit_client and
+         record. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />

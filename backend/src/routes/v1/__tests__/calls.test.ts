@@ -9,15 +9,19 @@ import { app, registerAdmin, registerUser } from '@/test/helpers';
  * issuance) via the same LiveStreamingProvider Step 4 LIVE uses — see
  * live.test.ts for the equivalent statement about that layer. What's not
  * exercised here (and cannot be, on this machine) is real two-way WebRTC
- * audio/video — see docs/STEP5_PROGRESS.md.
+ * audio — see docs/STEP5_PROGRESS.md.
+ *
+ * 1:1 calling is voice-only — 1:1 video calling was permanently removed as
+ * a product decision (misuse/indecent-behavior risk). This is unrelated to
+ * LIVE, which remains full video.
  */
-async function initiateCall(callerToken: string, calleeId: string, type: 'VOICE' | 'VIDEO' = 'VOICE') {
-  return request(app).post('/api/v1/calls').set('Authorization', `Bearer ${callerToken}`).send({ calleeId, type });
+async function initiateCall(callerToken: string, calleeId: string) {
+  return request(app).post('/api/v1/calls').set('Authorization', `Bearer ${callerToken}`).send({ calleeId });
 }
 
 describe('POST /api/v1/calls (initiate)', () => {
   it('requires authentication', async () => {
-    const response = await request(app).post('/api/v1/calls').send({ calleeId: 'x', type: 'VOICE' });
+    const response = await request(app).post('/api/v1/calls').send({ calleeId: 'x' });
     expect(response.status).toBe(401);
   });
 
@@ -25,10 +29,9 @@ describe('POST /api/v1/calls (initiate)', () => {
     const { response: callerReg } = await registerUser();
     const { response: calleeReg } = await registerUser();
 
-    const response = await initiateCall(callerReg.body.accessToken, calleeReg.body.user.id, 'VIDEO');
+    const response = await initiateCall(callerReg.body.accessToken, calleeReg.body.user.id);
     expect(response.status).toBe(201);
     expect(response.body.call.status).toBe('RINGING');
-    expect(response.body.call.type).toBe('VIDEO');
     expect(response.body.token).toEqual(expect.any(String));
 
     const payload = JSON.parse(Buffer.from(response.body.token.split('.')[1], 'base64url').toString());

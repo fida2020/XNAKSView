@@ -11,7 +11,6 @@ import '../../../core/errors/app_exception.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../core/router/app_router.dart';
-import '../domain/call_model.dart';
 import '../domain/conversation_model.dart';
 import '../domain/message_model.dart';
 import 'messaging_providers.dart';
@@ -249,17 +248,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  Future<void> _startCall(CallType type) async {
+  Future<void> _startCall() async {
     final other = _conversation?.otherUser;
     if (other == null) return;
     try {
-      final info = await ref.read(messagingRepositoryProvider).initiateCall(other.id, type: type);
+      final info = await ref.read(messagingRepositoryProvider).initiateCall(other.id);
       if (!mounted) return;
       context.pushActiveCall(
         callId: info.call.id,
         token: info.token,
         wsUrl: info.wsUrl,
-        isVideo: type == CallType.video,
         otherUserName: other.displayLabel,
       );
     } on AppException catch (error) {
@@ -336,8 +334,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ),
         actions: [
-          IconButton(icon: const Icon(Icons.call_outlined), onPressed: () => _startCall(CallType.voice)),
-          IconButton(icon: const Icon(Icons.videocam_outlined), onPressed: () => _startCall(CallType.video)),
+          IconButton(icon: const Icon(Icons.call_outlined), onPressed: _startCall),
         ],
       ),
       body: _isLoading

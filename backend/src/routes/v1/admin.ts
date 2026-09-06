@@ -566,7 +566,7 @@ adminRouter.get(
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit + 1,
         include: {
-          call: { select: { id: true, callerId: true, calleeId: true, type: true, status: true } },
+          call: { select: { id: true, callerId: true, calleeId: true, status: true } },
           reporter: { select: { id: true, email: true, phone: true } },
         },
       });

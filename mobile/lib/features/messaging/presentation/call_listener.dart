@@ -9,7 +9,7 @@ import 'messaging_providers.dart';
 
 /// Wraps the whole app: connects the realtime gateway once signed in, and
 /// pushes [IncomingCallScreen] whenever a `call:incoming` event arrives —
-/// this is the "incoming voice/video call" notification (see
+/// this is the "incoming voice call" notification (see
 /// docs/STEP5_PROGRESS.md for why this is in-app only, not a background
 /// push notification).
 class CallListener extends ConsumerWidget {
@@ -48,7 +48,6 @@ class CallListener extends ConsumerWidget {
     navigatorContext.pushIncomingCall(
       callId: call['id'] as String,
       callerName: caller?['displayName'] as String? ?? (caller?['username'] != null ? '@${caller!['username']}' : null),
-      callType: call['type'] as String,
     );
   }
 }

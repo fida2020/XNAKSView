@@ -58,10 +58,15 @@ each video has exactly one playback rendition).
 Live streaming infrastructure, live chat, viewer counts, live-specific
 moderation, stream discovery.
 
-## Phase 5 — Chat / Voice / Video Calls
+## Phase 5 — Chat / Voice Calls
 
 Direct/group messaging (`Message` model), real-time delivery, voice
-calls, video calls, call history, block/report integration.
+calls, call history, block/report integration.
+
+1:1 video calling was implemented alongside voice calling and then
+permanently removed as a product decision (misuse/indecent-behavior risk)
+— it does not exist anywhere in XNAKView and will not be implemented. 1:1
+calling is voice-only. This is unrelated to LIVE, which remains full video.
 
 ## Phase 6 — TikTok Feature Parity / Social + Creation Features
 

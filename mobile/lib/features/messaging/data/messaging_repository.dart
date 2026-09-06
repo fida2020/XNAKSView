@@ -126,11 +126,8 @@ class MessagingRepository {
   // Calls
   // ---------------------------------------------------------------------
 
-  Future<CallConnectionInfo> initiateCall(String calleeId, {required CallType type}) async {
-    final response = await _apiClient.post<Map<String, dynamic>>(
-      '/calls',
-      data: {'calleeId': calleeId, 'type': type == CallType.video ? 'VIDEO' : 'VOICE'},
-    );
+  Future<CallConnectionInfo> initiateCall(String calleeId) async {
+    final response = await _apiClient.post<Map<String, dynamic>>('/calls', data: {'calleeId': calleeId});
     return CallConnectionInfo.fromJson(response.data!);
   }
 

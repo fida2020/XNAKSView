@@ -55,7 +55,6 @@ export const updateMessagingSettingsSchema = z
 
 export const createCallSchema = z.object({
   calleeId: z.string().uuid(),
-  type: z.enum(['VOICE', 'VIDEO']),
 });
 
 export const listCallsQuerySchema = z.object({

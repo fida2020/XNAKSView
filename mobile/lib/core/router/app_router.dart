@@ -47,17 +47,16 @@ extension AppNavigation on BuildContext {
     required String callId,
     required String token,
     required String wsUrl,
-    required bool isVideo,
     String? otherUserName,
   }) =>
       push(
         '${AppRoutes.activeCall}/$callId',
-        extra: {'token': token, 'wsUrl': wsUrl, 'isVideo': isVideo, 'otherUserName': otherUserName},
+        extra: {'token': token, 'wsUrl': wsUrl, 'otherUserName': otherUserName},
       );
 
-  void pushIncomingCall({required String callId, String? callerName, required String callType}) => push(
+  void pushIncomingCall({required String callId, String? callerName}) => push(
         '${AppRoutes.incomingCall}/$callId',
-        extra: {'callerName': callerName, 'callType': callType},
+        extra: {'callerName': callerName},
       );
 
   /// Omit [userId] to view the signed-in user's own profile.
@@ -121,7 +120,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => IncomingCallScreen(
           callId: state.pathParameters['callId']!,
           callerName: (state.extra as Map?)?['callerName'] as String?,
-          callType: (state.extra as Map?)?['callType'] as String? ?? 'VOICE',
         ),
       ),
       GoRoute(
@@ -132,7 +130,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             callId: state.pathParameters['callId']!,
             token: extra['token'] as String,
             wsUrl: extra['wsUrl'] as String,
-            isVideo: extra['isVideo'] as bool,
             otherUserName: extra['otherUserName'] as String?,
           );
         },

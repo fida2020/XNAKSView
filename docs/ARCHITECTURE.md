@@ -2,7 +2,7 @@
 
 **Company:** BALOCH SAHAB TECHNOLOGIES (SMC-PRIVATE) LIMITED
 **Domain:** balochsahab.com
-**Status:** Step 5 — Direct Messaging + Voice/Video Calls
+**Status:** Step 5 — Direct Messaging + Voice Calls
 
 This document describes the architecture established in Step 1 and
 extended in Steps 2, 3, 4, and 5. It will be extended further, not
@@ -13,6 +13,11 @@ Dating/Matching was implemented under a working Step 6 and then permanently
 cancelled before being committed; it has been fully removed from this
 codebase and does not exist anywhere in XNAKView. Step 6 is now defined as
 TikTok-parity social + creation features (see `ROADMAP.md`).
+
+1:1 video calling (Step 5) was permanently removed as a product decision
+(misuse/indecent-behavior risk) and does not exist anywhere in XNAKView.
+1:1 calling is voice-only. This is unrelated to LIVE, which remains full
+video (streaming, co-host/multi-guest, Match/Battle).
 
 ## 1. Overall architecture
 
@@ -454,7 +459,12 @@ table were deliberately *not* created.
   and busy-detection are computed inside a `Serializable` transaction — the
   same fix Step 4 applied to guest-slot acceptance — so two simultaneous
   initiations can't both succeed and leave a caller or callee in two calls
-  at once.
+  at once. **1:1 calling is voice-only.** 1:1 video calling was originally
+  built alongside voice calling in Step 5 and was later permanently removed
+  as a product decision (misuse/indecent-behavior risk) — there is no
+  `Call.type`/video branch anywhere in the call lifecycle. This is unrelated
+  to LIVE, which remains full video (streaming, co-host/multi-guest,
+  Match/Battle).
 - **Voice messages get the same "never trust the client" validation as
   video uploads.** `lib/voiceValidation.ts` checks real magic bytes and
   runs the file through `ffprobe` (extending `lib/ffmpeg.ts`) to confirm an
@@ -470,7 +480,7 @@ table were deliberately *not* created.
 - **What Step 5 implements vs. defers** (see `docs/STEP5_PROGRESS.md` §7 for
   the full list): implemented — 1:1 messaging with requests/mute/pin/
   block/report, voice messages, real-time delivery/typing/presence/read
-  receipts, 1:1 voice+video calls with full lifecycle and history, admin
+  receipts, 1:1 voice calls with full lifecycle and history, admin
   inspection. Deferred — group messaging, push notifications, a generic
   person-level report model (satisfied here by conversation reports +
   blocking), and — unchanged from Step 4's position — full AI

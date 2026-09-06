@@ -18,12 +18,17 @@ import { createCallSchema, listCallsQuerySchema, reportCallSchema } from '@/sche
 import { AppError } from '@/utils/AppError';
 
 /**
- * 1:1 voice/video calls, real WebRTC via the same self-hosted LiveKit
+ * 1:1 voice calls, real WebRTC via the same self-hosted LiveKit
  * `LiveStreamingProvider` Step 4 LIVE uses (lib/liveStreaming.ts) — a call
  * is just a two-participant room with a short lifecycle around it. The
  * server is authoritative for every relationship (caller/callee identity,
  * who may accept/decline/end, block/ban checks) — a client never asserts
  * anything about call ownership beyond "which call id am I acting on."
+ *
+ * 1:1 video calling was permanently removed as a product decision (misuse/
+ * indecent-behavior risk) — every call is voice-only. This is unrelated to
+ * LIVE, which remains full video (streaming, co-host/multi-guest, Match/
+ * Battle) and is unaffected.
  */
 export const callsRouter = Router();
 
@@ -39,7 +44,6 @@ function serializeCall(call: {
   id: string;
   callerId: string;
   calleeId: string;
-  type: string;
   status: string;
   startedAt: Date;
   answeredAt: Date | null;
@@ -51,7 +55,6 @@ function serializeCall(call: {
     id: call.id,
     callerId: call.callerId,
     calleeId: call.calleeId,
-    type: call.type,
     status: call.status,
     startedAt: call.startedAt.toISOString(),
     answeredAt: call.answeredAt?.toISOString() ?? null,
@@ -126,7 +129,7 @@ function scheduleRingTimeout(callId: string, callerId: string, calleeId: string)
 callsRouter.post('/calls', requireAuth, initiateLimiter, validate({ body: createCallSchema }), async (req, res, next) => {
   try {
     const callerId = req.user!.id;
-    const { calleeId, type } = req.body;
+    const { calleeId } = req.body;
 
     if (calleeId === callerId) {
       throw new AppError('BAD_REQUEST', 'You cannot call yourself');
@@ -166,10 +169,10 @@ callsRouter.post('/calls', requireAuth, initiateLimiter, validate({ body: create
           if (calleeBusyRow) {
             calleeBusy = true;
             return tx.call.create({
-              data: { callerId, calleeId, type, status: 'BUSY', roomName: '', endedAt: new Date() },
+              data: { callerId, calleeId, status: 'BUSY', roomName: '', endedAt: new Date() },
             });
           }
-          return tx.call.create({ data: { id: callId, callerId, calleeId, type, status: 'RINGING', roomName } });
+          return tx.call.create({ data: { id: callId, callerId, calleeId, status: 'RINGING', roomName } });
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
@@ -192,7 +195,7 @@ callsRouter.post('/calls', requireAuth, initiateLimiter, validate({ body: create
 
     const callerSummary = (await fetchAuthorSummaries([callerId])).get(callerId);
     emitToUser(calleeId, 'call:incoming', { call: serializeCall(call), caller: callerSummary });
-    notificationDispatcher.notify(calleeId, type === 'VIDEO' ? 'INCOMING_VIDEO_CALL' : 'INCOMING_VOICE_CALL', {
+    notificationDispatcher.notify(calleeId, 'INCOMING_VOICE_CALL', {
       callId: call.id,
       callerId,
     });

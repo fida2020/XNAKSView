@@ -6,6 +6,14 @@ backend automated test suite (no mocks, including a real Socket.IO
 client/server round trip) and mobile/admin static analysis. NOT yet
 committed — pending final review.**
 
+**Update (permanent removal):** 1:1 video calling, described throughout
+this historical log as originally built, was subsequently permanently
+removed as a product decision (misuse/indecent-behavior risk). 1:1 calling
+is voice-only; there is no `Call.type`/video branch, video call UI, or
+video call notification anywhere in the codebase. This log is left as an
+accurate record of what Step 5 originally shipped and tested — see
+`docs/ARCHITECTURE.md` for the current, voice-only state.
+
 Project location: `C:\Users\Asia Computer\Desktop\XNAKView`.
 
 ## What this step covers

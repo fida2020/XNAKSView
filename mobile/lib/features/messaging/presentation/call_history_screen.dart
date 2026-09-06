@@ -129,7 +129,7 @@ class _CallHistoryTile extends StatelessWidget {
           Text(_subtitle),
         ],
       ),
-      trailing: Icon(call.type == CallType.video ? Icons.videocam_outlined : Icons.call_outlined),
+      trailing: const Icon(Icons.call_outlined),
     );
   }
 }

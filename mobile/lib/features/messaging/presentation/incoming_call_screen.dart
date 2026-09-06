@@ -11,11 +11,10 @@ import 'messaging_providers.dart';
 /// on accept — receiving this screen does not by itself grant any room
 /// access.
 class IncomingCallScreen extends ConsumerStatefulWidget {
-  const IncomingCallScreen({super.key, required this.callId, this.callerName, required this.callType});
+  const IncomingCallScreen({super.key, required this.callId, this.callerName});
 
   final String callId;
   final String? callerName;
-  final String callType;
 
   @override
   ConsumerState<IncomingCallScreen> createState() => _IncomingCallScreenState();
@@ -51,7 +50,6 @@ class _IncomingCallScreenState extends ConsumerState<IncomingCallScreen> {
         callId: widget.callId,
         token: info.token,
         wsUrl: info.wsUrl,
-        isVideo: widget.callType == 'VIDEO',
         otherUserName: widget.callerName,
       );
     } on AppException catch (error) {
@@ -88,10 +86,7 @@ class _IncomingCallScreenState extends ConsumerState<IncomingCallScreen> {
               const SizedBox(height: 16),
               Text(widget.callerName ?? 'Unknown caller', style: const TextStyle(color: Colors.white, fontSize: 22)),
               const SizedBox(height: 8),
-              Text(
-                widget.callType == 'VIDEO' ? 'Incoming video call…' : 'Incoming voice call…',
-                style: const TextStyle(color: Colors.white70),
-              ),
+              const Text('Incoming voice call…', style: TextStyle(color: Colors.white70)),
               const Spacer(),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 32),
