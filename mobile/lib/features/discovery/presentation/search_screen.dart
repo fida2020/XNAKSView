@@ -18,7 +18,12 @@ import 'discovery_providers.dart';
 /// searches with clear, and (per the request's `type` split) one search bar
 /// with category tabs rather than three separate screens.
 class SearchScreen extends ConsumerStatefulWidget {
-  const SearchScreen({super.key});
+  const SearchScreen({super.key, this.autofocus = true});
+
+  /// False when embedded as the Discover bottom-nav tab (TikTok never pops
+  /// the keyboard open just from switching to that tab); true for the
+  /// pushed, full-screen search entered from a search icon elsewhere.
+  final bool autofocus;
 
   @override
   ConsumerState<SearchScreen> createState() => _SearchScreenState();
@@ -93,7 +98,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> with SingleTickerPr
       appBar: AppBar(
         title: TextField(
           controller: _controller,
-          autofocus: true,
+          autofocus: widget.autofocus,
           decoration: const InputDecoration(hintText: 'Search XNAKView', border: InputBorder.none),
           onChanged: _onChanged,
           onSubmitted: _runSearch,
@@ -163,7 +168,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> with SingleTickerPr
                       ),
                       title: Text(user.displayLabel),
                       subtitle: Text('${user.followerCount} followers'),
-                      onTap: () => context.pushCreatorProfile(userId: user.id),
+                      onTap: () => context.pushCreatorProfile(user.id),
                     ),
                 ],
               ),

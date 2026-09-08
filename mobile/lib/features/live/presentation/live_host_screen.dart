@@ -6,18 +6,30 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../core/errors/app_exception.dart';
+import '../../coins/presentation/live_gift_overlay.dart';
 import '../domain/live_session_model.dart';
+import 'live_battle_bar.dart';
 import 'live_chat_panel.dart';
+import 'live_goal_bar.dart';
+import 'live_guest_sheet.dart';
+import 'live_reactions_overlay.dart';
+import 'live_share_sheet.dart';
 import 'live_providers.dart';
 
 /// The host's own LIVE room: publishes camera + mic to the self-hosted
 /// LiveKit server (see infrastructure/docker-compose.yml) and shows a local
 /// preview, viewer count, chat, and the end-LIVE control.
 class LiveHostScreen extends ConsumerStatefulWidget {
-  const LiveHostScreen({super.key, required this.liveSession, required this.connection});
+  const LiveHostScreen({super.key, required this.liveSession, required this.connection, this.voiceOnly = false});
 
   final LiveSessionModel liveSession;
   final LiveConnectionInfo connection;
+
+  /// Voice Chat LIVE mode — publishes mic only, camera stays off for the
+  /// whole session. LiveKit natively supports an audio-only local
+  /// participant (no custom pipeline needed); the only difference from a
+  /// normal broadcast is that `setCameraEnabled` is never called.
+  final bool voiceOnly;
 
   @override
   ConsumerState<LiveHostScreen> createState() => _LiveHostScreenState();
@@ -27,6 +39,8 @@ class _LiveHostScreenState extends ConsumerState<LiveHostScreen> {
   late final Room _room;
   EventsListener<RoomEvent>? _listener;
   Timer? _viewerCountTimer;
+  final _battleBarKey = GlobalKey<LiveBattleBarState>();
+  final _reactionsKey = GlobalKey<LiveReactionsOverlayState>();
 
   bool _isConnecting = true;
   bool _isEnding = false;
@@ -65,13 +79,13 @@ class _LiveHostScreenState extends ConsumerState<LiveHostScreen> {
   }
 
   Future<void> _connect() async {
-    final camera = await Permission.camera.request();
     final mic = await Permission.microphone.request();
+    final camera = widget.voiceOnly ? PermissionStatus.granted : await Permission.camera.request();
     if (!camera.isGranted || !mic.isGranted) {
       if (mounted) {
         setState(() {
           _isConnecting = false;
-          _error = 'Camera and microphone permissions are required to go LIVE.';
+          _error = widget.voiceOnly ? 'Microphone permission is required to go LIVE.' : 'Camera and microphone permissions are required to go LIVE.';
         });
       }
       return;
@@ -79,7 +93,7 @@ class _LiveHostScreenState extends ConsumerState<LiveHostScreen> {
 
     try {
       await _room.connect(widget.connection.wsUrl, widget.connection.token);
-      await _room.localParticipant?.setCameraEnabled(true);
+      if (!widget.voiceOnly) await _room.localParticipant?.setCameraEnabled(true);
       await _room.localParticipant?.setMicrophoneEnabled(true);
       if (mounted) setState(() => _isConnecting = false);
     } catch (error) {
@@ -148,11 +162,66 @@ class _LiveHostScreenState extends ConsumerState<LiveHostScreen> {
                     ),
                     const Spacer(),
                     IconButton(
+                      icon: const Icon(Icons.ios_share, color: Colors.white),
+                      tooltip: 'Share',
+                      onPressed: () => showLiveShareSheet(context, liveSessionId: widget.liveSession.id, title: widget.liveSession.title),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.group_outlined, color: Colors.white),
+                      tooltip: 'Guests',
+                      onPressed: () => showGuestManagementSheet(context, widget.liveSession.id, widget.liveSession.hostId),
+                    ),
+                    PopupMenuButton<bool>(
+                      icon: const Icon(Icons.sports_kabaddi, color: Colors.white),
+                      tooltip: 'Battle',
+                      onSelected: (asTeamMatch) => _battleBarKey.currentState?.openChallengePicker(context, asTeamMatch: asTeamMatch),
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(value: false, child: Text('1v1 Battle')),
+                        PopupMenuItem(value: true, child: Text('Team Battle')),
+                      ],
+                    ),
+                    IconButton(
                       icon: const Icon(Icons.close, color: Colors.white),
                       onPressed: _confirmEnd,
                     ),
                   ],
                 ),
+              ),
+              Positioned(
+                top: 52,
+                left: 0,
+                right: 0,
+                child: LiveBattleBar(key: _battleBarKey, liveSessionId: widget.liveSession.id, isHost: true, hostSessionId: widget.liveSession.id),
+              ),
+              if (widget.liveSession.goalEnabled && widget.liveSession.goalTargetCoins != null)
+                Positioned(
+                  top: 96,
+                  left: 12,
+                  right: 12,
+                  child: LiveGoalBar(
+                    liveSessionId: widget.liveSession.id,
+                    goalTitle: widget.liveSession.goalTitle,
+                    targetCoins: widget.liveSession.goalTargetCoins!,
+                    initialProgressCoins: widget.liveSession.goalProgressCoins,
+                  ),
+                ),
+              // Display only — the host's own screen never sends a Gift
+              // (there's no viewer-side "target the host" concept for the
+              // host to use), but the host still sees the same realtime
+              // activity feed/animation viewers do when a Gift lands on
+              // this session or one of its guests.
+              Positioned.fill(
+                child: LiveGiftOverlay(
+                  liveSessionId: widget.liveSession.id,
+                  hostId: widget.liveSession.hostId,
+                  hostLabel: widget.liveSession.host?.displayLabel,
+                ),
+              ),
+              Positioned.fill(child: LiveReactionsOverlay(key: _reactionsKey, liveSessionId: widget.liveSession.id)),
+              Positioned(
+                right: 12,
+                bottom: 200,
+                child: LiveReactionButton(overlayKey: _reactionsKey),
               ),
               Positioned(
                 left: 0,
@@ -196,6 +265,22 @@ class _LiveHostScreenState extends ConsumerState<LiveHostScreen> {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(_error!, style: const TextStyle(color: Colors.white), textAlign: TextAlign.center),
+        ),
+      );
+    }
+
+    if (widget.voiceOnly) {
+      return Container(
+        color: Colors.grey.shade900,
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.mic, color: Colors.white, size: 64),
+              SizedBox(height: 12),
+              Text('Voice Chat LIVE — camera off', style: TextStyle(color: Colors.white70)),
+            ],
+          ),
         ),
       );
     }

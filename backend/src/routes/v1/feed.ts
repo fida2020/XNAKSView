@@ -27,17 +27,38 @@ export const feedRouter = Router();
  */
 feedRouter.get('/feed', requireAuth, validate({ query: feedQuerySchema }), async (req, res, next) => {
   try {
-    const { cursor, limit } = req.query as unknown as { cursor?: string; limit: number };
+    const { cursor, limit, scope } = req.query as unknown as { cursor?: string; limit: number; scope: 'forYou' | 'following' | 'friends' };
 
     const decoded = cursor ? decodeCursor(cursor) : null;
     if (cursor && !decoded) {
       throw new AppError('BAD_REQUEST', 'Invalid cursor');
     }
 
+    // Following scope reuses the same Follow rows every other "am I
+    // following this author" check already reads from — not a second,
+    // parallel notion of "following."
+    let followingAuthorIds: string[] | null = null;
+    if (scope === 'following') {
+      const follows = await prisma.follow.findMany({ where: { followerId: req.user!.id }, select: { followingId: true } });
+      followingAuthorIds = follows.map((follow) => follow.followingId);
+    } else if (scope === 'friends') {
+      // "Friends" (brief: Step 2) — XNAKView has no separate friend-request
+      // system, so a friend is honestly defined as a real mutual follow
+      // (both directions), never a fabricated relationship. Computed
+      // straight from the same Follow table as every other scope.
+      const [following, followers] = await Promise.all([
+        prisma.follow.findMany({ where: { followerId: req.user!.id }, select: { followingId: true } }),
+        prisma.follow.findMany({ where: { followingId: req.user!.id }, select: { followerId: true } }),
+      ]);
+      const followerSet = new Set(followers.map((f) => f.followerId));
+      followingAuthorIds = following.map((f) => f.followingId).filter((id) => followerSet.has(id));
+    }
+
     const videos = await prisma.video.findMany({
       where: {
         status: 'READY',
         visibility: 'PUBLIC',
+        ...(followingAuthorIds ? { userId: { in: followingAuthorIds } } : {}),
         ...(decoded
           ? {
               OR: [

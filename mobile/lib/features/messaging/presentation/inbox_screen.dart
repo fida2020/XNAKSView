@@ -3,20 +3,63 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/errors/app_exception.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/widgets/xnak_avatar.dart';
+import '../../activity/presentation/activity_providers.dart';
+import '../../activity/presentation/activity_screen.dart';
 import '../domain/conversation_model.dart';
 import 'messaging_providers.dart';
 
-/// The conversation list — pinned conversations first, then the rest
-/// ordered by most recent activity. A conversation only appears here once
-/// it has at least one message (see backend routes/v1/conversations.ts).
-class InboxScreen extends ConsumerStatefulWidget {
+/// TikTok-style combined Inbox — Activity (likes/comments/follows) and
+/// Messages as two tabs of one screen, exactly TikTok's structure, reusing
+/// the existing (separate) Activity and Messaging backends/controllers
+/// unchanged; only the presentation is combined.
+class InboxScreen extends ConsumerWidget {
   const InboxScreen({super.key});
 
   @override
-  ConsumerState<InboxScreen> createState() => _InboxScreenState();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unreadActivity = ref.watch(activityControllerProvider.select((s) => s.items.where((i) => !i.read).length));
+
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Inbox'),
+          actions: [
+            IconButton(icon: const Icon(Icons.call_outlined), tooltip: 'Call history', onPressed: () => context.pushCallHistory()),
+          ],
+          bottom: TabBar(
+            tabs: [
+              Tab(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Activity'),
+                    if (unreadActivity > 0) ...[
+                      const SizedBox(width: 6),
+                      CircleAvatar(radius: 8, backgroundColor: Colors.redAccent, child: Text('$unreadActivity', style: const TextStyle(fontSize: 9, color: Colors.white))),
+                    ],
+                  ],
+                ),
+              ),
+              const Tab(text: 'Messages'),
+            ],
+          ),
+        ),
+        body: const TabBarView(children: [ActivityBody(), _MessagesTab()]),
+      ),
+    );
+  }
 }
 
-class _InboxScreenState extends ConsumerState<InboxScreen> {
+class _MessagesTab extends ConsumerStatefulWidget {
+  const _MessagesTab();
+
+  @override
+  ConsumerState<_MessagesTab> createState() => _MessagesTabState();
+}
+
+class _MessagesTabState extends ConsumerState<_MessagesTab> {
   List<ConversationModel> _pinned = [];
   List<ConversationModel> _conversations = [];
   String? _nextCursor;
@@ -65,44 +108,36 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Messages'),
-        actions: [
-          IconButton(icon: const Icon(Icons.call_outlined), tooltip: 'Call history', onPressed: () => context.pushCallHistory()),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(child: Text(_error!))
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView(
-                    children: [
-                      if (_pinned.isNotEmpty) ...[
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-                          child: Text('Pinned', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                        ),
-                        for (final conversation in _pinned) _ConversationTile(conversation: conversation, onChanged: _load),
-                        const Divider(height: 1),
-                      ],
-                      for (final conversation in _conversations) _ConversationTile(conversation: conversation, onChanged: _load),
-                      if (_nextCursor != null)
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Center(child: TextButton(onPressed: _loadMore, child: const Text('Load more'))),
-                        ),
-                      if (_pinned.isEmpty && _conversations.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.all(32),
-                          child: Center(child: Text('No conversations yet.')),
-                        ),
+    return _isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : _error != null
+            ? Center(child: Text(_error!))
+            : RefreshIndicator(
+                onRefresh: _load,
+                child: ListView(
+                  children: [
+                    if (_pinned.isNotEmpty) ...[
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+                        child: Text('Pinned', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      ),
+                      for (final conversation in _pinned) _ConversationTile(conversation: conversation, onChanged: _load),
+                      const Divider(height: 1),
                     ],
-                  ),
+                    for (final conversation in _conversations) _ConversationTile(conversation: conversation, onChanged: _load),
+                    if (_nextCursor != null)
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Center(child: TextButton(onPressed: _loadMore, child: const Text('Load more'))),
+                      ),
+                    if (_pinned.isEmpty && _conversations.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Center(child: Text('No conversations yet.')),
+                      ),
+                  ],
                 ),
-    );
+              );
   }
 }
 
@@ -118,10 +153,7 @@ class _ConversationTile extends ConsumerWidget {
     final isRequest = conversation.status == ConversationRequestStatus.pending;
 
     return ListTile(
-      leading: CircleAvatar(
-        backgroundImage: other?.avatarUrl != null ? NetworkImage(other!.avatarUrl!) : null,
-        child: other?.avatarUrl == null ? Text((other?.displayLabel ?? '?').characters.first.toUpperCase()) : null,
-      ),
+      leading: XnakAvatar(avatarUrl: other?.avatarUrl, radius: 24),
       title: Text(other?.displayLabel ?? 'Unknown', style: TextStyle(fontWeight: conversation.unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
       subtitle: Text(
         isRequest ? 'Message request' : (conversation.lastMessagePreview ?? ''),

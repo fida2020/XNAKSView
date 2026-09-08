@@ -3,6 +3,7 @@ import { Router } from 'express';
 
 import { liveRoomName, liveStreamingProvider } from '@/lib/liveStreaming';
 import { prisma } from '@/lib/prisma';
+import { fetchAuthorSummaries } from '@/lib/videoAccess';
 import { requireAuth } from '@/middleware/auth';
 import { createAuthRateLimiter } from '@/middleware/rateLimit';
 import { validate } from '@/middleware/validate';
@@ -201,12 +202,18 @@ liveGuestsRouter.get('/live/:id/guests', requireAuth, async (req, res, next) => 
       where: { liveSessionId: liveSession.id, status: { in: ['INVITED', 'ACTIVE'] } },
       orderBy: { createdAt: 'asc' },
     });
+    // Step 7: a viewer needs to know who a guest actually IS to target a
+    // Gift at them (and to make sense of "Gift sent to @username" in the
+    // realtime event) — the same batch author lookup already used for
+    // video/LIVE-session author embedding, not a per-guest N+1 fetch.
+    const authors = await fetchAuthorSummaries(slots.map((slot) => slot.userId));
     res.status(200).json({
       guests: slots.map((slot) => ({
         id: slot.id,
         userId: slot.userId,
         role: slot.role,
         status: slot.status,
+        user: authors.get(slot.userId) ?? null,
       })),
       maxGuestSlots: liveSession.maxGuestSlots,
     });

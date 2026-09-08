@@ -68,6 +68,8 @@ class VideoModel extends Equatable {
     this.allowDuet = true,
     this.allowStitch = true,
     this.allowDownload = true,
+    this.allowComments = true,
+    this.allowGifts = true,
     this.addYoursPrompt,
     this.soundId,
     this.author,
@@ -98,6 +100,8 @@ class VideoModel extends Equatable {
       allowDuet: json['allowDuet'] as bool? ?? true,
       allowStitch: json['allowStitch'] as bool? ?? true,
       allowDownload: json['allowDownload'] as bool? ?? true,
+      allowComments: json['allowComments'] as bool? ?? true,
+      allowGifts: json['allowGifts'] as bool? ?? true,
       addYoursPrompt: json['addYoursPrompt'] as String?,
       soundId: json['soundId'] as String?,
       author: json['author'] == null ? null : VideoAuthor.fromJson(json['author'] as Map<String, dynamic>),
@@ -127,6 +131,8 @@ class VideoModel extends Equatable {
   final bool allowDuet;
   final bool allowStitch;
   final bool allowDownload;
+  final bool allowComments;
+  final bool allowGifts;
   final String? addYoursPrompt;
   final String? soundId;
   final VideoAuthor? author;
@@ -164,6 +170,8 @@ class VideoModel extends Equatable {
       allowDuet: allowDuet,
       allowStitch: allowStitch,
       allowDownload: allowDownload,
+      allowComments: allowComments,
+      allowGifts: allowGifts,
       addYoursPrompt: addYoursPrompt,
       soundId: soundId,
       author: author,

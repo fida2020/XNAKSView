@@ -1,7 +1,11 @@
+import { randomUUID } from 'crypto';
+
 import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 
+import { onContentPublished } from '@/lib/gamification/events';
 import { extractHashtags, syncTextPostHashtags } from '@/lib/hashtags';
+import { assertModerationAllowsCreation, moderateText } from '@/lib/moderation/moderationPipeline';
 import { decodeCursor, encodeCursor } from '@/lib/pagination';
 import { prisma } from '@/lib/prisma';
 import { fetchAuthorSummaries } from '@/lib/videoAccess';
@@ -68,11 +72,17 @@ async function loadVisibleTextPost(id: string, requesterId: string) {
 textPostsRouter.post('/text-posts', requireAuth, createLimiter, validate({ body: createTextPostSchema }), async (req, res, next) => {
   try {
     const { text, backgroundStyle, visibility } = req.body;
+
+    const postId = randomUUID();
+    const moderation = await moderateText({ contentType: 'TEXT_POST', contentId: postId, authorId: req.user!.id, text });
+    assertModerationAllowsCreation(moderation, 'post');
+
     const post = await prisma.$transaction(async (tx) => {
-      const created = await tx.textPost.create({ data: { userId: req.user!.id, text, backgroundStyle, visibility } });
+      const created = await tx.textPost.create({ data: { id: postId, userId: req.user!.id, text, backgroundStyle, visibility } });
       await syncTextPostHashtags(tx, created.id, extractHashtags(text));
       return created;
     });
+    if (post.visibility === 'PUBLIC') onContentPublished(post.userId, 'TEXT_POST', post.id);
     res.status(201).json(serializeTextPost(post));
   } catch (error) {
     next(error);
@@ -190,8 +200,13 @@ textPostsRouter.post(
   async (req, res, next) => {
     try {
       const post = await loadVisibleTextPost(req.params.id!, req.user!.id);
+
+      const commentId = randomUUID();
+      const moderation = await moderateText({ contentType: 'TEXT_POST_COMMENT', contentId: commentId, authorId: req.user!.id, text: req.body.text });
+      assertModerationAllowsCreation(moderation, 'comment');
+
       const comment = await prisma.$transaction(async (tx) => {
-        const created = await tx.textPostComment.create({ data: { textPostId: post.id, userId: req.user!.id, text: req.body.text } });
+        const created = await tx.textPostComment.create({ data: { id: commentId, textPostId: post.id, userId: req.user!.id, text: req.body.text } });
         await tx.textPost.update({ where: { id: post.id }, data: { commentCount: { increment: 1 } } });
         return created;
       });

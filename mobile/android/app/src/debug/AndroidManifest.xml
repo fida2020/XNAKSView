@@ -4,4 +4,9 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Debug-only: allows plain HTTP (not HTTPS) so the app can reach the
+         XNAKView backend at its LAN IP during local development. Merged
+         only into debug builds (this file is never included in a release
+         build) — production must keep cleartext traffic blocked. -->
+    <application android:usesCleartextTraffic="true" />
 </manifest>

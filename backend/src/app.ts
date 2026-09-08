@@ -29,6 +29,21 @@ export function createApp(): Express {
         if (res.statusCode >= 400) return 'warn';
         return 'info';
       },
+      // pino-http's default request/response serializers log every header
+      // verbatim — without this, every access token, refresh cookie, and
+      // OTP-request-carrying cookie would land in plaintext in the log
+      // stream on every single request. `censor` overwrites rather than
+      // drops the key, so it's still visible in the log shape that a header
+      // was present, just never its value.
+      redact: {
+        paths: [
+          'req.headers.authorization',
+          'req.headers.cookie',
+          'req.headers["set-cookie"]',
+          'res.headers["set-cookie"]',
+        ],
+        censor: '[REDACTED]',
+      },
     }),
   );
 

@@ -1,7 +1,44 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
+import { prisma } from '@/lib/prisma';
 import { app, registerUser, uploadSampleVideo, waitForVideoSettled } from '@/test/helpers';
+
+describe('GET /api/v1/users/:id', () => {
+  it('sums likeCount across the creator\'s own READY videos as the profile\'s third stat, alongside follower/following counts', async () => {
+    const { response: creatorReg } = await registerUser();
+    const { response: viewerReg } = await registerUser();
+
+    const first = await uploadSampleVideo(creatorReg.body.accessToken);
+    await waitForVideoSettled(first.body.id, creatorReg.body.accessToken);
+    const second = await uploadSampleVideo(creatorReg.body.accessToken);
+    await waitForVideoSettled(second.body.id, creatorReg.body.accessToken);
+
+    await request(app).post(`/api/v1/videos/${first.body.id}/like`).set('Authorization', `Bearer ${viewerReg.body.accessToken}`);
+    await request(app).post(`/api/v1/videos/${second.body.id}/like`).set('Authorization', `Bearer ${viewerReg.body.accessToken}`);
+
+    const profile = await request(app).get(`/api/v1/users/${creatorReg.body.user.id}`).set('Authorization', `Bearer ${viewerReg.body.accessToken}`);
+    expect(profile.status).toBe(200);
+    expect(profile.body.likeCount).toBe(2);
+    expect(profile.body.followerCount).toBe(0);
+    expect(profile.body.followingCount).toBe(0);
+  });
+
+  it('never counts likes on a PRIVATE video toward another visitor\'s view of the total', async () => {
+    const { response: creatorReg } = await registerUser();
+    const { response: viewerReg } = await registerUser();
+
+    const priv = await uploadSampleVideo(creatorReg.body.accessToken, { visibility: 'PRIVATE' });
+    await waitForVideoSettled(priv.body.id, creatorReg.body.accessToken);
+    await request(app).post(`/api/v1/videos/${priv.body.id}/like`).set('Authorization', `Bearer ${creatorReg.body.accessToken}`);
+
+    const asViewer = await request(app).get(`/api/v1/users/${creatorReg.body.user.id}`).set('Authorization', `Bearer ${viewerReg.body.accessToken}`);
+    expect(asViewer.body.likeCount).toBe(0);
+
+    const asSelf = await request(app).get(`/api/v1/users/${creatorReg.body.user.id}`).set('Authorization', `Bearer ${creatorReg.body.accessToken}`);
+    expect(asSelf.body.likeCount).toBe(1);
+  });
+});
 
 describe('POST/DELETE /api/v1/users/:id/follow', () => {
   it('requires authentication', async () => {
@@ -43,12 +80,17 @@ describe('POST/DELETE /api/v1/users/:id/follow', () => {
     expect(second.status).toBe(409);
   });
 
-  it('cannot follow self', async () => {
+  it('cannot follow self, and never creates a database record for it', async () => {
     const { response: selfReg } = await registerUser();
     const response = await request(app)
       .post(`/api/v1/users/${selfReg.body.user.id}/follow`)
       .set('Authorization', `Bearer ${selfReg.body.accessToken}`);
     expect(response.status).toBe(400);
+
+    const record = await prisma.follow.findFirst({
+      where: { followerId: selfReg.body.user.id, followingId: selfReg.body.user.id },
+    });
+    expect(record).toBeNull();
   });
 
   it('unfollows a previously-followed user', async () => {

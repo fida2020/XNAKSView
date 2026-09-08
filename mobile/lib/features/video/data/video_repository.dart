@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -12,10 +13,13 @@ class VideoRepository {
 
   final ApiClient _apiClient;
 
-  Future<FeedPage> fetchFeed({String? cursor, int limit = 10}) async {
+  /// [scope] `forYou` (default) is the open algorithmic/chronological feed;
+  /// `following` scopes to creators the caller follows (backend reuses the
+  /// same Follow rows the follow/unfollow buttons already write).
+  Future<FeedPage> fetchFeed({String? cursor, int limit = 10, String scope = 'forYou'}) async {
     final response = await _apiClient.get<Map<String, dynamic>>(
       '/feed',
-      queryParameters: {'limit': limit, 'cursor': ?cursor},
+      queryParameters: {'limit': limit, 'cursor': ?cursor, 'scope': scope},
     );
     return FeedPage.fromJson(response.data!);
   }
@@ -41,6 +45,22 @@ class VideoRepository {
     required VideoVisibility visibility,
     String? addYoursPrompt,
     String? soundId,
+    /// Real licensed music (Epidemic Sound Partner Content API) — mutually
+    /// exclusive with [soundId]; server rejects a request that sets both.
+    String? epidemicTrackId,
+    String? epidemicTrackTitle,
+    String? epidemicTrackArtist,
+    bool allowDuet = true,
+    bool allowStitch = true,
+    bool allowDownload = true,
+    bool allowComments = true,
+    /// Video editor rebuild — the real trim/speed/filter/text/rotate/cover/
+    /// volume spec (see domain/video_edit_spec.dart), sent as a JSON string
+    /// since multipart form data has no native nested-object encoding.
+    Map<String, dynamic>? editSpec,
+    /// A real recorded voice-over track (see video_editor_screen.dart),
+    /// mixed into the exported video server-side.
+    File? voiceoverFile,
     void Function(double progress)? onProgress,
   }) async {
     final formData = FormData.fromMap({
@@ -49,6 +69,15 @@ class VideoRepository {
       'visibility': visibility == VideoVisibility.private ? 'PRIVATE' : 'PUBLIC',
       'addYoursPrompt': ?addYoursPrompt,
       'soundId': ?soundId,
+      'epidemicTrackId': ?epidemicTrackId,
+      'epidemicTrackTitle': ?epidemicTrackTitle,
+      'epidemicTrackArtist': ?epidemicTrackArtist,
+      'allowDuet': '$allowDuet',
+      'allowStitch': '$allowStitch',
+      'allowDownload': '$allowDownload',
+      'allowComments': '$allowComments',
+      if (editSpec != null) 'edit': jsonEncode(editSpec),
+      if (voiceoverFile != null) 'voiceover': await MultipartFile.fromFile(voiceoverFile.path, filename: voiceoverFile.uri.pathSegments.last),
     });
 
     final response = await _apiClient.post<Map<String, dynamic>>(

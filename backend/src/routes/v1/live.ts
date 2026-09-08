@@ -1,11 +1,15 @@
 import { unlink } from 'fs/promises';
 import path from 'path';
+import { randomUUID } from 'crypto';
 
 import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 
+import { onLiveSessionEnded, onLiveSessionStarted, onLiveWatchSession } from '@/lib/gamification/events';
 import { probeImage } from '@/lib/imageValidation';
 import { checkLiveEligibility } from '@/lib/liveEligibility';
+import { emitToLiveSession } from '@/lib/realtime';
+import { assertModerationAllowsCreation, moderateText } from '@/lib/moderation/moderationPipeline';
 import { liveRoomName, liveStreamingProvider } from '@/lib/liveStreaming';
 import { serializeLiveSession } from '@/lib/liveAccess';
 import {
@@ -26,6 +30,7 @@ import { validate } from '@/middleware/validate';
 import {
   assignModeratorSchema,
   liveChatMessageSchema,
+  liveReactionSchema,
   listLiveChatQuerySchema,
   listLiveQuerySchema,
   reportLiveChatMessageSchema,
@@ -41,6 +46,7 @@ export const liveRouter = Router();
 const startLimiter = createAuthRateLimiter(60 * 60 * 1000, 5, 'live-start');
 const joinLeaveLimiter = createAuthRateLimiter(60 * 1000, 60, 'live-join-leave');
 const chatLimiter = createAuthRateLimiter(60 * 1000, 30, 'live-chat');
+const reactionLimiter = createAuthRateLimiter(60 * 1000, 60, 'live-reaction');
 const reportLimiter = createAuthRateLimiter(60 * 60 * 1000, 10, 'live-report');
 
 async function loadLiveSessionOrThrow(id: string) {
@@ -92,7 +98,7 @@ liveRouter.post(
         }
       }
 
-      const { title, category, maxGuestSlots, subscriberOnlyChat, replayEnabled } = req.body;
+      const { title, category, maxGuestSlots, subscriberOnlyChat, replayEnabled, goalTitle, goalTargetCoins, isVoiceOnly } = req.body;
 
       // Never trust a client-supplied host/id — the host is always the
       // authenticated requester, and the id is always server-generated.
@@ -106,6 +112,10 @@ liveRouter.post(
           subscriberOnlyChat,
           replayEnabled,
           replayStatus: replayEnabled ? 'NOT_AVAILABLE' : 'NONE',
+          goalEnabled: goalTargetCoins !== undefined,
+          goalTitle: goalTargetCoins !== undefined ? goalTitle : undefined,
+          goalTargetCoins,
+          isVoiceOnly,
         },
       });
 
@@ -122,6 +132,8 @@ liveRouter.post(
         identity: req.user!.id,
         canPublish: true,
       });
+
+      onLiveSessionStarted(liveSession.hostId);
 
       const authors = await fetchAuthorSummaries([liveSession.hostId]);
       res.status(201).json({
@@ -239,21 +251,36 @@ liveRouter.post('/live/:id/end', requireAuth, async (req, res, next) => {
       return;
     }
 
+    // Read still-active viewers BEFORE force-closing them below — needed to
+    // credit each one's watch-time gamification event with a real duration.
+    const stillWatching = await prisma.liveViewer.findMany({
+      where: { liveSessionId: liveSession.id, leftAt: null },
+      select: { userId: true, joinedAt: true },
+    });
+
+    const endedAt = new Date();
     const [updated] = await prisma.$transaction([
       prisma.liveSession.update({
         where: { id: liveSession.id },
-        data: { status: 'ENDED', endedAt: new Date() },
+        data: { status: 'ENDED', endedAt },
       }),
       // Proper session cleanup: nobody is left "actively viewing" a session
       // that no longer exists, regardless of whether every viewer's client
       // called /leave before disconnecting.
       prisma.liveViewer.updateMany({
         where: { liveSessionId: liveSession.id, leftAt: null },
-        data: { leftAt: new Date() },
+        data: { leftAt: endedAt },
       }),
     ]);
 
     await liveStreamingProvider.deleteRoom(liveRoomName(liveSession.id));
+
+    const hostDurationMinutes = Math.max(0, Math.round((endedAt.getTime() - liveSession.startedAt.getTime()) / 60_000));
+    onLiveSessionEnded(liveSession.hostId, liveSession.id, hostDurationMinutes);
+    for (const viewer of stillWatching) {
+      const minutes = Math.max(0, Math.round((endedAt.getTime() - viewer.joinedAt.getTime()) / 60_000));
+      onLiveWatchSession(viewer.userId, liveSession.hostId, liveSession.id, minutes);
+    }
 
     res.status(200).json(serializeLiveSession(updated, { isOwnSession: true }));
   } catch (error) {
@@ -334,21 +361,31 @@ liveRouter.post('/live/:id/join', requireAuth, joinLeaveLimiter, async (req, res
 liveRouter.post('/live/:id/leave', requireAuth, joinLeaveLimiter, async (req, res, next) => {
   try {
     const liveSession = await loadLiveSessionOrThrow(req.params.id!);
+    const leftAt = new Date();
 
-    const updatedSession = await prisma.$transaction(async (tx) => {
-      const updated = await tx.liveViewer.updateMany({
+    const { updatedSession, joinedAt } = await prisma.$transaction(async (tx) => {
+      const activeViewer = await tx.liveViewer.findFirst({
         where: { liveSessionId: liveSession.id, userId: req.user!.id, leftAt: null },
-        data: { leftAt: new Date() },
+        select: { joinedAt: true },
       });
-      if (updated.count === 0) {
+      if (!activeViewer) {
         throw new AppError('NOT_FOUND', 'You are not currently viewing this LIVE session');
       }
 
-      return tx.liveSession.update({
+      await tx.liveViewer.updateMany({
+        where: { liveSessionId: liveSession.id, userId: req.user!.id, leftAt: null },
+        data: { leftAt },
+      });
+
+      const session = await tx.liveSession.update({
         where: { id: liveSession.id },
         data: { viewerCount: { decrement: 1 } },
       });
+      return { updatedSession: session, joinedAt: activeViewer.joinedAt };
     });
+
+    const minutes = Math.max(0, Math.round((leftAt.getTime() - joinedAt.getTime()) / 60_000));
+    onLiveWatchSession(req.user!.id, liveSession.hostId, liveSession.id, minutes);
 
     res.status(200).json({ viewerCount: updatedSession.viewerCount });
   } catch (error) {
@@ -464,8 +501,18 @@ liveRouter.post(
         throw new AppError('BAD_REQUEST', 'Your message was blocked for containing prohibited language');
       }
 
+      // Step 10 — the unified AI moderation pipeline, on top of the
+      // host-managed blocked-word filter above. LIVE chat is one of the
+      // XNAKView Strict Abuse Rule's named surfaces (brief §3/§4): a
+      // context-aware, high-confidence severe match here can permanently
+      // ban immediately. Moderated BEFORE the row is created (using a
+      // pre-generated id) so a removed message is never even persisted.
+      const messageId = randomUUID();
+      const moderation = await moderateText({ contentType: 'LIVE_CHAT_MESSAGE', contentId: messageId, authorId: req.user!.id, text: req.body.text });
+      assertModerationAllowsCreation(moderation, 'LIVE comment');
+
       const message = await prisma.liveChatMessage.create({
-        data: { liveSessionId: liveSession.id, userId: req.user!.id, text: req.body.text },
+        data: { id: messageId, liveSessionId: liveSession.id, userId: req.user!.id, text: req.body.text },
       });
 
       res.status(201).json({
@@ -475,6 +522,40 @@ liveRouter.post(
         text: message.text,
         createdAt: message.createdAt,
       });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// -----------------------------------------------------------------------
+// Reactions — real-time, ephemeral (no DB row; a reaction burst is
+// transient by nature, same as every real short-video platform's LIVE
+// reactions). Authorization mirrors chat: only the host or a currently
+// active viewer, never a blocked/muted user.
+// -----------------------------------------------------------------------
+
+liveRouter.post(
+  '/live/:id/reactions',
+  requireAuth,
+  reactionLimiter,
+  validate({ body: liveReactionSchema }),
+  async (req, res, next) => {
+    try {
+      const liveSession = await loadLiveSessionOrThrow(req.params.id!);
+      if (liveSession.status !== 'LIVE') {
+        throw new AppError('CONFLICT', 'This LIVE session has ended');
+      }
+      const canReact = await isSessionParticipant(liveSession.id, req.user!.id, liveSession.hostId);
+      if (!canReact) {
+        throw new AppError('FORBIDDEN', 'Join this LIVE session before reacting');
+      }
+      if (await isUserBlockedFromSession(liveSession.id, req.user!.id)) {
+        throw new AppError('FORBIDDEN', 'You have been blocked from this LIVE session');
+      }
+
+      emitToLiveSession(liveSession.id, 'live:reaction', { emoji: req.body.emoji, senderId: req.user!.id });
+      res.status(200).json({ sent: true });
     } catch (error) {
       next(error);
     }

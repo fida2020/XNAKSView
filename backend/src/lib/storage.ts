@@ -150,6 +150,11 @@ export function videoThumbnailKey(videoId: string): string {
   return `videos/${videoId}/thumbnail.jpg`;
 }
 
+/** Video editor rebuild — a real recorded voice-over track, persisted the same way `videoOriginalKey` is so a retried processing attempt can still find and re-mix it. */
+export function videoVoiceoverKey(videoId: string, extension: string): string {
+  return `videos/${videoId}/voiceover${extension}`;
+}
+
 export function photoPostAssetKey(photoPostId: string, assetId: string, extension: string): string {
   return `photo-posts/${photoPostId}/${assetId}${extension}`;
 }

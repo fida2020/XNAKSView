@@ -97,6 +97,59 @@ class MeResult extends Equatable {
   List<Object?> get props => [user, profile];
 }
 
+/// Result of `/auth/otp/request` — a real code was (or, for a LOGIN request
+/// against a non-existent/inactive account, was deliberately NOT) sent.
+/// `maskedIdentifier` is what the OTP screen shows (`f***@example.com` /
+/// `+*******2671`) — the full identifier is never echoed back.
+class OtpRequestResult extends Equatable {
+  const OtpRequestResult({
+    required this.maskedIdentifier,
+    required this.expiresInSeconds,
+    required this.resendAvailableInSeconds,
+  });
+
+  factory OtpRequestResult.fromJson(Map<String, dynamic> json) {
+    return OtpRequestResult(
+      maskedIdentifier: json['maskedIdentifier'] as String,
+      expiresInSeconds: json['expiresInSeconds'] as int,
+      resendAvailableInSeconds: json['resendAvailableInSeconds'] as int,
+    );
+  }
+
+  final String maskedIdentifier;
+  final int expiresInSeconds;
+  final int resendAvailableInSeconds;
+
+  @override
+  List<Object?> get props => [maskedIdentifier, expiresInSeconds, resendAvailableInSeconds];
+}
+
+/// One of three real outcomes from `/auth/oauth/authenticate` — never a
+/// single "success" shape, since which screen comes next genuinely
+/// differs (direct login vs. account-linking re-auth vs. new-signup
+/// profile setup).
+sealed class OAuthAuthResult {}
+
+class OAuthLoginResult extends OAuthAuthResult {
+  OAuthLoginResult({required this.session});
+  final AuthSessionResult session;
+}
+
+class OAuthNeedsLinkingResult extends OAuthAuthResult {
+  OAuthNeedsLinkingResult({required this.linkingToken, required this.maskedEmail});
+  final String linkingToken;
+  final String maskedEmail;
+}
+
+class OAuthNewSignupResult extends OAuthAuthResult {
+  OAuthNewSignupResult({required this.socialSignupToken, this.email, this.suggestedUsername, this.name, this.pictureUrl});
+  final String socialSignupToken;
+  final String? email;
+  final String? suggestedUsername;
+  final String? name;
+  final String? pictureUrl;
+}
+
 class AuthSessionResult extends Equatable {
   const AuthSessionResult({required this.user, required this.accessToken, required this.refreshToken});
 

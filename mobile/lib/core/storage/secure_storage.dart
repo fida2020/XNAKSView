@@ -41,4 +41,5 @@ class StorageKeys {
   static const String accessToken = 'auth.access_token';
   static const String refreshToken = 'auth.refresh_token';
   static const String deviceId = 'device.id';
+  static const String themeMode = 'settings.theme_mode';
 }

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 
+import { assertModerationAllowsCreation, moderateText } from '@/lib/moderation/moderationPipeline';
 import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
@@ -46,6 +47,18 @@ profileRouter.put('/profile', requireAuth, validate({ body: upsertProfileSchema 
   try {
     const userId = req.user!.id;
     const { username, displayName, bio, avatarUrl, country, city } = req.body;
+
+    // Step 10 — username/bio moderation (impersonation, abusive/profane
+    // language, scam patterns). Avatar image moderation has the same
+    // real-object-storage-URL caveat as photo posts (see
+    // routes/v1/photoPosts.ts) — not wired here since `avatarUrl` is
+    // client-supplied, not an XNAKView-controlled upload, in this route.
+    const usernameModeration = await moderateText({ contentType: 'USERNAME', contentId: userId, authorId: userId, text: username });
+    assertModerationAllowsCreation(usernameModeration, 'username');
+    if (bio) {
+      const bioModeration = await moderateText({ contentType: 'BIO', contentId: userId, authorId: userId, text: bio });
+      assertModerationAllowsCreation(bioModeration, 'bio');
+    }
 
     const profile = await prisma.profile.upsert({
       where: { userId },

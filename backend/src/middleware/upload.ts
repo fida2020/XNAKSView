@@ -115,6 +115,59 @@ export function uploadSingleVideo(fieldName: string) {
   return wrapUploadErrors(videoUpload.single(fieldName), env.MAX_UPLOAD_BYTES);
 }
 
+/**
+ * Video editor rebuild — the real Post flow needs the video file plus an
+ * OPTIONAL recorded voice-over audio file in the same multipart request.
+ * `multer.fields()` (rather than two separate `.single()` calls) is what
+ * lets one request carry both; the video field still uses the video
+ * fileFilter/size limit, the voiceover field the audio one, matching what
+ * each file actually is.
+ */
+export function uploadVideoWithVoiceover(videoField: string, voiceoverField: string) {
+  const middleware = multer({
+    storage: diskStorage,
+    limits: { fileSize: env.MAX_UPLOAD_BYTES },
+    fileFilter: (_req, file, callback) => {
+      if (file.fieldname === voiceoverField) {
+        const isObviouslyNotAudio = /^(video|text|image)\//.test(file.mimetype) || file.mimetype === 'application/pdf';
+        if (isObviouslyNotAudio) {
+          callback(new AppError('BAD_REQUEST', `Unsupported file type: ${file.mimetype}`));
+          return;
+        }
+        callback(null, true);
+        return;
+      }
+      const isObviouslyNotVideo = /^(image|text|audio)\//.test(file.mimetype) || file.mimetype === 'application/pdf';
+      if (isObviouslyNotVideo) {
+        callback(new AppError('BAD_REQUEST', `Unsupported file type: ${file.mimetype}`));
+        return;
+      }
+      callback(null, true);
+    },
+  }).fields([
+    { name: videoField, maxCount: 1 },
+    { name: voiceoverField, maxCount: 1 },
+  ]);
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    middleware(req, res, (error: unknown) => {
+      if (!error) {
+        next();
+        return;
+      }
+      if (error instanceof MulterError) {
+        if (error.code === 'LIMIT_FILE_SIZE') {
+          next(new AppError('BAD_REQUEST', `File exceeds the maximum upload size of ${env.MAX_UPLOAD_BYTES} bytes`));
+          return;
+        }
+        next(new AppError('BAD_REQUEST', `Upload error: ${error.message}`));
+        return;
+      }
+      next(error);
+    });
+  };
+}
+
 /** Same as `uploadSingleVideo`, sized and filtered for images (e.g. a LIVE thumbnail). The field is optional — if absent, `req.file` is simply undefined. */
 export function uploadSingleImage(fieldName: string) {
   return wrapUploadErrors(imageUpload.single(fieldName), MAX_IMAGE_BYTES);

@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 
 import { recordActivity } from '@/lib/activityFeed';
+import { onFollowCreated } from '@/lib/gamification/events';
 import { decodeCursor, encodeCursor } from '@/lib/pagination';
 import { prisma } from '@/lib/prisma';
 import {
@@ -58,6 +59,17 @@ followRouter.get('/users/:id', requireAuth, async (req, res, next) => {
 
     const isFollowedByMe =
       targetId === req.user!.id ? undefined : (await fetchFollowingIds(req.user!.id, [targetId])).has(targetId);
+    const isSelf = targetId === req.user!.id;
+
+    // Total likes across the creator's own videos — current TikTok's third
+    // profile stat alongside Following/Followers. Always summed fresh from
+    // `Video.likeCount` (never a separately-maintained counter that could
+    // drift), scoped to PUBLIC videos for someone else's profile so a
+    // visitor never sees likes on content they couldn't otherwise see.
+    const likeTotal = await prisma.video.aggregate({
+      where: { userId: targetId, status: 'READY', ...(isSelf ? {} : { visibility: 'PUBLIC' }) },
+      _sum: { likeCount: true },
+    });
 
     res.status(200).json({
       id: target.id,
@@ -67,8 +79,9 @@ followRouter.get('/users/:id', requireAuth, async (req, res, next) => {
       avatarUrl: target.profile?.avatarUrl ?? null,
       followerCount: target.followerCount,
       followingCount: target.followingCount,
+      likeCount: likeTotal._sum.likeCount ?? 0,
       isFollowedByMe,
-      isSelf: targetId === req.user!.id,
+      isSelf,
     });
   } catch (error) {
     next(error);
@@ -93,6 +106,8 @@ followRouter.post('/users/:id/follow', requireAuth, followLimiter, async (req, r
       await tx.user.update({ where: { id: targetId }, data: { followerCount: { increment: 1 } } });
       await recordActivity(tx, { recipientId: targetId, actorId: req.user!.id, type: 'FOLLOW' });
     });
+
+    onFollowCreated(req.user!.id, targetId);
 
     res.status(201).json({ following: true });
   } catch (error) {

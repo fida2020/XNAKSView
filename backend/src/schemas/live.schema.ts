@@ -27,6 +27,15 @@ export const startLiveSchema = z.object({
   // Subscriber-only chat and replay are opt-in per session.
   subscriberOnlyChat: formBoolean,
   replayEnabled: formBoolean,
+  // LIVE Goal — real, optional Coin-spend target. Enabled only when the
+  // host actually sets a positive target; goalTitle alone with no target
+  // never turns the goal "on" (there would be nothing real to track).
+  goalTitle: z.string().trim().max(80).optional(),
+  goalTargetCoins: z.coerce.number().int().min(1).max(10_000_000).optional(),
+  // Voice Chat LIVE mode — a real, persisted session-type flag; the host's
+  // client never publishes a camera track when this is true (LiveKit
+  // natively supports an audio-only participant, no custom pipeline needed).
+  isVoiceOnly: formBoolean,
 });
 
 export const listLiveQuerySchema = z.object({
@@ -36,6 +45,13 @@ export const listLiveQuerySchema = z.object({
 
 export const liveChatMessageSchema = z.object({
   text: z.string().trim().min(1, 'Message cannot be empty').max(300, 'Message must be at most 300 characters'),
+});
+
+// Real LIVE reactions — a fixed, honest set (no arbitrary emoji injection
+// into the realtime room), broadcast ephemerally (see routes/v1/live.ts) —
+// never persisted, matching how a transient reaction burst actually works.
+export const liveReactionSchema = z.object({
+  emoji: z.enum(['❤️', '👍', '😂', '🔥', '👏']),
 });
 
 export const listLiveChatQuerySchema = z.object({
@@ -112,9 +128,18 @@ export const inviteGuestSchema = z.object({
 export const createLiveMatchSchema = z.object({
   opponentSessionId: z.string().uuid(),
   durationSeconds: z.coerce.number().int().min(30).max(3600).default(180),
+  // SOLO (default) is the original 1v1 shape — sessionA/sessionB are the
+  // only two participants. TEAM allows additional LiveMatchTeamMember
+  // sessions to join either side after creation via the team/invite route.
+  matchType: z.enum(['SOLO', 'TEAM']).default('SOLO'),
 });
 
 export const matchScoreSchema = z.object({
   side: z.enum(['A', 'B']),
   increment: z.coerce.number().int().min(1).max(100).default(1),
+});
+
+export const inviteTeamMemberSchema = z.object({
+  liveSessionId: z.string().uuid(),
+  side: z.enum(['A', 'B']),
 });

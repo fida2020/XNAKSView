@@ -9,6 +9,7 @@ import { probeImage } from '@/lib/imageValidation';
 import { probeVideo } from '@/lib/ffmpeg';
 import { recordActivity } from '@/lib/activityFeed';
 import { isBlockedEitherDirection } from '@/lib/messagingAccess';
+import { assertModerationAllowsCreation, moderateText } from '@/lib/moderation/moderationPipeline';
 import { streamAsset } from '@/lib/mediaStreaming';
 import { prisma } from '@/lib/prisma';
 import { storyMediaKey, storage } from '@/lib/storage';
@@ -93,6 +94,12 @@ storiesRouter.post(
 
       const storyId = randomUUID();
       const key = storyMediaKey(storyId, path.extname(file.originalname) || (mediaType === 'PHOTO' ? '.jpg' : '.mp4'));
+
+      if (caption) {
+        const captionModeration = await moderateText({ contentType: 'STORY', contentId: storyId, authorId: req.user!.id, text: caption });
+        assertModerationAllowsCreation(captionModeration, 'story');
+      }
+
       await storage.putFromLocalPath(key, file.path);
 
       const now = new Date();

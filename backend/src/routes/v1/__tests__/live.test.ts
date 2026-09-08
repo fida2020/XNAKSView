@@ -363,3 +363,56 @@ describe('LIVE reports', () => {
     expect(second.status).toBe(409);
   });
 });
+
+describe('LIVE reactions', () => {
+  it('lets the host and an active viewer send a real reaction; rejects an invalid emoji', async () => {
+    const { response: hostReg } = await registerUser();
+    const started = await startLive(hostReg.body.accessToken);
+    const liveId = started.body.liveSession.id;
+    const { response: viewerReg } = await registerUser();
+    await request(app).post(`/api/v1/live/${liveId}/join`).set('Authorization', `Bearer ${viewerReg.body.accessToken}`);
+
+    const hostReaction = await request(app)
+      .post(`/api/v1/live/${liveId}/reactions`)
+      .set('Authorization', `Bearer ${hostReg.body.accessToken}`)
+      .send({ emoji: '🔥' });
+    expect(hostReaction.status).toBe(200);
+
+    const viewerReaction = await request(app)
+      .post(`/api/v1/live/${liveId}/reactions`)
+      .set('Authorization', `Bearer ${viewerReg.body.accessToken}`)
+      .send({ emoji: '❤️' });
+    expect(viewerReaction.status).toBe(200);
+
+    const invalid = await request(app)
+      .post(`/api/v1/live/${liveId}/reactions`)
+      .set('Authorization', `Bearer ${hostReg.body.accessToken}`)
+      .send({ emoji: '🍕' }); // not in the real, fixed reaction set
+    expect(invalid.status).toBe(422);
+  });
+
+  it('rejects a reaction from someone who has not joined', async () => {
+    const { response: hostReg } = await registerUser();
+    const started = await startLive(hostReg.body.accessToken);
+    const { response: strangerReg } = await registerUser();
+
+    const response = await request(app)
+      .post(`/api/v1/live/${started.body.liveSession.id}/reactions`)
+      .set('Authorization', `Bearer ${strangerReg.body.accessToken}`)
+      .send({ emoji: '👍' });
+    expect(response.status).toBe(403);
+  });
+
+  it('rejects a reaction once the LIVE session has ended', async () => {
+    const { response: hostReg } = await registerUser();
+    const started = await startLive(hostReg.body.accessToken);
+    const liveId = started.body.liveSession.id;
+    await request(app).post(`/api/v1/live/${liveId}/end`).set('Authorization', `Bearer ${hostReg.body.accessToken}`);
+
+    const response = await request(app)
+      .post(`/api/v1/live/${liveId}/reactions`)
+      .set('Authorization', `Bearer ${hostReg.body.accessToken}`)
+      .send({ emoji: '👏' });
+    expect(response.status).toBe(409);
+  });
+});

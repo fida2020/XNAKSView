@@ -4,6 +4,7 @@ import path from 'path';
 import request from 'supertest';
 
 import { createApp } from '@/app';
+import { getTestCapturedOtpMessage } from '@/lib/otpProviders';
 import { prisma } from '@/lib/prisma';
 import { initRealtime } from '@/lib/realtime';
 
@@ -55,6 +56,38 @@ export function isoDateNYearsAgo(years: number, dayOffset = 0): string {
   return date.toISOString().slice(0, 10);
 }
 
+/**
+ * Registration is OTP-gated (see routes/v1/auth.ts) — this drives the real
+ * `/auth/otp/request` + `/auth/otp/verify` endpoints first (never
+ * constructing a `verificationToken` by hand), reading the real
+ * server-generated code back out of the test-capture provider
+ * (`getTestCapturedOtpMessage`), exactly as a real client would read it off
+ * an SMS/email. If the OTP step itself fails (e.g. the identifier is
+ * already registered), that failure is returned as `response` so existing
+ * callers asserting on `response.status`/`response.body.error` keep working
+ * unchanged.
+ */
+async function verifyRegistrationOtp(identifierFields: { email?: string; phone?: string }): Promise<{ response: request.Response; verificationToken?: string }> {
+  const otpRequestRes = await request(app)
+    .post('/api/v1/auth/otp/request')
+    .send({ ...identifierFields, purpose: 'REGISTER' });
+  if (otpRequestRes.status !== 200) {
+    return { response: otpRequestRes };
+  }
+
+  const identifier = (identifierFields.email ?? identifierFields.phone) as string;
+  const message = getTestCapturedOtpMessage(identifier);
+  const code = message?.match(/^(\d{6})/)?.[1] ?? '000000';
+
+  const otpVerifyRes = await request(app)
+    .post('/api/v1/auth/otp/verify')
+    .send({ ...identifierFields, purpose: 'REGISTER', code });
+  if (otpVerifyRes.status !== 200) {
+    return { response: otpVerifyRes };
+  }
+  return { response: otpVerifyRes, verificationToken: otpVerifyRes.body.verificationToken };
+}
+
 export async function registerUser(overrides: Partial<Record<string, unknown>> = {}) {
   const body = {
     email: uniqueEmail(),
@@ -62,7 +95,16 @@ export async function registerUser(overrides: Partial<Record<string, unknown>> =
     dateOfBirth: isoDateNYearsAgo(25),
     ...overrides,
   };
-  const response = await request(app).post('/api/v1/auth/register').send(body);
+
+  const identifierFields = body.email ? { email: body.email as string } : { phone: (body as { phone?: string }).phone as string };
+  const { response: otpResponse, verificationToken } = await verifyRegistrationOtp(identifierFields);
+  if (!verificationToken) {
+    return { response: otpResponse, body };
+  }
+
+  const response = await request(app)
+    .post('/api/v1/auth/register')
+    .send({ ...body, verificationToken });
   return { response, body };
 }
 

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Real Facebook Login configuration — DEVELOPMENT PLACEHOLDER VALUES.
+  Replace all three with the real values from your Facebook App at
+  https://developers.facebook.com/apps (Settings -> Basic), then rebuild.
+  Until replaced, "Continue with Facebook" will fail at the native SDK
+  layer with a clear Facebook-side configuration error — never a fake
+  success (see backend lib/oauthProviders.ts for the matching server-side
+  honest-refusal behavior when FACEBOOK_APP_ID/FACEBOOK_APP_SECRET are
+  unset there too).
+-->
+<resources>
+    <!-- Referenced by the FacebookActivity label below (com.facebook.FacebookActivity
+         needs a string resource, not a literal, for its android:label). -->
+    <string name="app_name">XNAKView</string>
+    <string name="facebook_app_id">REPLACE_WITH_REAL_FACEBOOK_APP_ID</string>
+    <string name="fb_login_protocol_scheme">fbREPLACE_WITH_REAL_FACEBOOK_APP_ID</string>
+    <string name="facebook_client_token">REPLACE_WITH_REAL_FACEBOOK_CLIENT_TOKEN</string>
+</resources>

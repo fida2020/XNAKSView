@@ -678,6 +678,236 @@ describe('LIVE Match / Battle', () => {
   });
 });
 
+describe('LIVE Team Match', () => {
+  async function createChallenge(hostAToken: string, sessionAId: string, sessionBId: string) {
+    return request(app)
+      .post(`/api/v1/live/${sessionAId}/match`)
+      .set('Authorization', `Bearer ${hostAToken}`)
+      .send({ opponentSessionId: sessionBId });
+  }
+
+  async function createTeamChallenge(hostAToken: string, sessionAId: string, sessionBId: string) {
+    return request(app)
+      .post(`/api/v1/live/${sessionAId}/match`)
+      .set('Authorization', `Bearer ${hostAToken}`)
+      .send({ opponentSessionId: sessionBId, matchType: 'TEAM' });
+  }
+
+  it('defaults new matches to SOLO, with an empty team roster', async () => {
+    const { response: hostAReg } = await registerUser();
+    const { response: hostBReg } = await registerUser();
+    const sessionA = await startLive(hostAReg.body.accessToken);
+    const sessionB = await startLive(hostBReg.body.accessToken);
+
+    const created = await createChallenge(hostAReg.body.accessToken, sessionA.body.liveSession.id, sessionB.body.liveSession.id);
+    expect(created.body.matchType).toBe('SOLO');
+    expect(created.body.teamMembers).toEqual([]);
+  });
+
+  it('creates a TEAM match and lets a side captain invite a teammate, who must accept before becoming ACTIVE', async () => {
+    const { response: hostAReg } = await registerUser();
+    const { response: hostBReg } = await registerUser();
+    const { response: teammateReg } = await registerUser();
+    const sessionA = await startLive(hostAReg.body.accessToken);
+    const sessionB = await startLive(hostBReg.body.accessToken);
+    const sessionC = await startLive(teammateReg.body.accessToken);
+
+    const created = await createTeamChallenge(hostAReg.body.accessToken, sessionA.body.liveSession.id, sessionB.body.liveSession.id);
+    expect(created.status).toBe(201);
+    expect(created.body.matchType).toBe('TEAM');
+
+    await request(app).post(`/api/v1/live/matches/${created.body.id}/accept`).set('Authorization', `Bearer ${hostBReg.body.accessToken}`);
+
+    const invite = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`)
+      .send({ liveSessionId: sessionC.body.liveSession.id, side: 'A' });
+    expect(invite.status).toBe(201);
+    expect(invite.body.status).toBe('INVITED');
+    expect(invite.body.side).toBe('A');
+
+    // Not yet ACTIVE, so it must not appear as part of the match's live roster.
+    const beforeAccept = await request(app).get(`/api/v1/live/matches/${created.body.id}`).set('Authorization', `Bearer ${hostAReg.body.accessToken}`);
+    expect(beforeAccept.body.teamMembers).toHaveLength(1);
+    expect(beforeAccept.body.teamMembers[0].status).toBe('INVITED');
+
+    const accept = await request(app)
+      .post(`/api/v1/live/matches/team/${invite.body.id}/accept`)
+      .set('Authorization', `Bearer ${teammateReg.body.accessToken}`);
+    expect(accept.status).toBe(200);
+    expect(accept.body.status).toBe('ACTIVE');
+
+    const afterAccept = await request(app).get(`/api/v1/live/matches/${created.body.id}`).set('Authorization', `Bearer ${hostAReg.body.accessToken}`);
+    expect(afterAccept.body.teamMembers[0].status).toBe('ACTIVE');
+  });
+
+  it('rejects team invites on a SOLO match', async () => {
+    const { response: hostAReg } = await registerUser();
+    const { response: hostBReg } = await registerUser();
+    const { response: teammateReg } = await registerUser();
+    const sessionA = await startLive(hostAReg.body.accessToken);
+    const sessionB = await startLive(hostBReg.body.accessToken);
+    const sessionC = await startLive(teammateReg.body.accessToken);
+    const created = await createChallenge(hostAReg.body.accessToken, sessionA.body.liveSession.id, sessionB.body.liveSession.id);
+
+    const invite = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`)
+      .send({ liveSessionId: sessionC.body.liveSession.id, side: 'A' });
+    expect(invite.status).toBe(400);
+  });
+
+  it('rejects a stranger — not the side captain nor an active teammate — from inviting to that side (anti-spoof)', async () => {
+    const { response: hostAReg } = await registerUser();
+    const { response: hostBReg } = await registerUser();
+    const { response: strangerReg } = await registerUser();
+    const { response: teammateReg } = await registerUser();
+    const sessionA = await startLive(hostAReg.body.accessToken);
+    const sessionB = await startLive(hostBReg.body.accessToken);
+    const sessionC = await startLive(teammateReg.body.accessToken);
+    const created = await createTeamChallenge(hostAReg.body.accessToken, sessionA.body.liveSession.id, sessionB.body.liveSession.id);
+    await request(app).post(`/api/v1/live/matches/${created.body.id}/accept`).set('Authorization', `Bearer ${hostBReg.body.accessToken}`);
+
+    // A host of side B cannot invite someone onto side A.
+    const wrongSide = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${hostBReg.body.accessToken}`)
+      .send({ liveSessionId: sessionC.body.liveSession.id, side: 'A' });
+    expect(wrongSide.status).toBe(403);
+
+    // An uninvolved stranger cannot invite anyone to either side.
+    const stranger = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${strangerReg.body.accessToken}`)
+      .send({ liveSessionId: sessionC.body.liveSession.id, side: 'A' });
+    expect(stranger.status).toBe(403);
+  });
+
+  it('lets an invited host decline instead of accepting', async () => {
+    const { response: hostAReg } = await registerUser();
+    const { response: hostBReg } = await registerUser();
+    const { response: teammateReg } = await registerUser();
+    const sessionA = await startLive(hostAReg.body.accessToken);
+    const sessionB = await startLive(hostBReg.body.accessToken);
+    const sessionC = await startLive(teammateReg.body.accessToken);
+    const created = await createTeamChallenge(hostAReg.body.accessToken, sessionA.body.liveSession.id, sessionB.body.liveSession.id);
+    await request(app).post(`/api/v1/live/matches/${created.body.id}/accept`).set('Authorization', `Bearer ${hostBReg.body.accessToken}`);
+    const invite = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`)
+      .send({ liveSessionId: sessionC.body.liveSession.id, side: 'A' });
+
+    const decline = await request(app)
+      .post(`/api/v1/live/matches/team/${invite.body.id}/decline`)
+      .set('Authorization', `Bearer ${teammateReg.body.accessToken}`);
+    expect(decline.status).toBe(200);
+    expect(decline.body.status).toBe('DECLINED');
+
+    // Not the invited host — cannot accept on their behalf.
+    const stolenAccept = await request(app)
+      .post(`/api/v1/live/matches/team/${invite.body.id}/accept`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`);
+    expect(stolenAccept.status).toBe(403);
+  });
+
+  it('only the side captain can remove an active teammate, and only that teammate\'s own host can leave voluntarily', async () => {
+    const { response: hostAReg } = await registerUser();
+    const { response: hostBReg } = await registerUser();
+    const { response: teammateReg } = await registerUser();
+    const { response: teammate2Reg } = await registerUser();
+    const sessionA = await startLive(hostAReg.body.accessToken);
+    const sessionB = await startLive(hostBReg.body.accessToken);
+    const sessionC = await startLive(teammateReg.body.accessToken);
+    const sessionD = await startLive(teammate2Reg.body.accessToken);
+    const created = await createTeamChallenge(hostAReg.body.accessToken, sessionA.body.liveSession.id, sessionB.body.liveSession.id);
+    await request(app).post(`/api/v1/live/matches/${created.body.id}/accept`).set('Authorization', `Bearer ${hostBReg.body.accessToken}`);
+
+    const inviteC = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`)
+      .send({ liveSessionId: sessionC.body.liveSession.id, side: 'A' });
+    await request(app).post(`/api/v1/live/matches/team/${inviteC.body.id}/accept`).set('Authorization', `Bearer ${teammateReg.body.accessToken}`);
+
+    const inviteD = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`)
+      .send({ liveSessionId: sessionD.body.liveSession.id, side: 'A' });
+    await request(app).post(`/api/v1/live/matches/team/${inviteD.body.id}/accept`).set('Authorization', `Bearer ${teammate2Reg.body.accessToken}`);
+
+    // A fellow teammate (not the captain) cannot remove another teammate.
+    const peerRemove = await request(app)
+      .post(`/api/v1/live/matches/team/${inviteD.body.id}/remove`)
+      .set('Authorization', `Bearer ${teammateReg.body.accessToken}`);
+    expect(peerRemove.status).toBe(403);
+
+    // The captain can remove a teammate.
+    const captainRemove = await request(app)
+      .post(`/api/v1/live/matches/team/${inviteD.body.id}/remove`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`);
+    expect(captainRemove.status).toBe(200);
+    expect(captainRemove.body.status).toBe('REMOVED');
+
+    // A teammate can voluntarily leave — nobody else can leave on their behalf.
+    const stolenLeave = await request(app)
+      .post(`/api/v1/live/matches/team/${inviteC.body.id}/leave`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`);
+    expect(stolenLeave.status).toBe(403);
+
+    const leave = await request(app)
+      .post(`/api/v1/live/matches/team/${inviteC.body.id}/leave`)
+      .set('Authorization', `Bearer ${teammateReg.body.accessToken}`);
+    expect(leave.status).toBe(200);
+    expect(leave.body.status).toBe('LEFT');
+  });
+
+  it('rejects inviting a session that is already committed to another match (duplicate/concurrent-event guard)', async () => {
+    const { response: hostAReg } = await registerUser();
+    const { response: hostBReg } = await registerUser();
+    const { response: hostEReg } = await registerUser();
+    const { response: teammateReg } = await registerUser();
+    const sessionA = await startLive(hostAReg.body.accessToken);
+    const sessionB = await startLive(hostBReg.body.accessToken);
+    const sessionE = await startLive(hostEReg.body.accessToken);
+    const sessionC = await startLive(teammateReg.body.accessToken);
+
+    const created = await createTeamChallenge(hostAReg.body.accessToken, sessionA.body.liveSession.id, sessionB.body.liveSession.id);
+    await request(app).post(`/api/v1/live/matches/${created.body.id}/accept`).set('Authorization', `Bearer ${hostBReg.body.accessToken}`);
+
+    // sessionC already committed elsewhere as a captain in a separate SOLO match.
+    await createChallenge(teammateReg.body.accessToken, sessionC.body.liveSession.id, sessionE.body.liveSession.id);
+
+    const invite = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`)
+      .send({ liveSessionId: sessionC.body.liveSession.id, side: 'A' });
+    expect(invite.status).toBe(409);
+  });
+
+  it('rejects inviting the same session twice into the same match (duplicate invite guard)', async () => {
+    const { response: hostAReg } = await registerUser();
+    const { response: hostBReg } = await registerUser();
+    const { response: teammateReg } = await registerUser();
+    const sessionA = await startLive(hostAReg.body.accessToken);
+    const sessionB = await startLive(hostBReg.body.accessToken);
+    const sessionC = await startLive(teammateReg.body.accessToken);
+
+    const created = await createTeamChallenge(hostAReg.body.accessToken, sessionA.body.liveSession.id, sessionB.body.liveSession.id);
+    await request(app).post(`/api/v1/live/matches/${created.body.id}/accept`).set('Authorization', `Bearer ${hostBReg.body.accessToken}`);
+
+    const firstInvite = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`)
+      .send({ liveSessionId: sessionC.body.liveSession.id, side: 'A' });
+    expect(firstInvite.status).toBe(201);
+
+    const secondInvite = await request(app)
+      .post(`/api/v1/live/matches/${created.body.id}/team/invite`)
+      .set('Authorization', `Bearer ${hostAReg.body.accessToken}`)
+      .send({ liveSessionId: sessionC.body.liveSession.id, side: 'A' });
+    expect(secondInvite.status).toBe(409);
+  });
+});
+
 describe('LIVE replay foundation', () => {
   it('reports NONE by default and NOT_AVAILABLE once requested at start', async () => {
     const { response: hostReg } = await registerUser();

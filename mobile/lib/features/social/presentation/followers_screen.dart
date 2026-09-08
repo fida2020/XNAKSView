@@ -97,7 +97,7 @@ class _FollowersScreenState extends ConsumerState<FollowersScreen> with SingleTi
             ),
             title: Text(user.displayLabel),
             trailing: showRemove ? TextButton(onPressed: () => _removeFollower(user), child: const Text('Remove')) : null,
-            onTap: () => context.pushCreatorProfile(userId: user.id),
+            onTap: () => context.pushCreatorProfile(user.id),
           ),
       ],
     );

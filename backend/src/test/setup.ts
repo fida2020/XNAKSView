@@ -3,10 +3,40 @@ import { afterAll, beforeAll } from 'vitest';
 import { connectDatabase, disconnectDatabase, prisma } from '@/lib/prisma';
 import { connectRedis, disconnectRedis, redis } from '@/lib/redis';
 
+import { parseDatabaseName } from './dbGuard';
+
 beforeAll(async () => {
   await connectDatabase();
   await connectRedis();
-  // Start each test run from a clean slate against the real dev database/Redis.
+
+  // Layer 2 safety guard (layer 1 is env.setup.ts, which runs before this
+  // file's imports resolve at all). Re-verify, using the LIVE connection
+  // itself, that we are actually talking to the dedicated test database
+  // before running the destructive TRUNCATE below — never trust
+  // process.env alone twice. Aborts loudly instead of truncating if this
+  // is ever wrong (e.g. env.setup.ts was skipped, or someone edited
+  // vitest.config.ts's setupFiles order).
+  const expectedTestDbName = parseDatabaseName(process.env.DATABASE_URL);
+  const devDbName = parseDatabaseName(process.env.DEV_DATABASE_URL_SNAPSHOT);
+  const [{ current_database: actualDbName } = { current_database: undefined }] = await prisma.$queryRawUnsafe<
+    { current_database: string }[]
+  >('SELECT current_database()');
+
+  const isVerifiedTestDb =
+    !!expectedTestDbName &&
+    expectedTestDbName.toLowerCase().includes('test') &&
+    actualDbName === expectedTestDbName &&
+    (!devDbName || actualDbName !== devDbName);
+
+  if (!isVerifiedTestDb) {
+    throw new Error(
+      `Refusing to run destructive tests: the live database connection ("${actualDbName ?? 'unknown'}") is not a ` +
+        'verified test database. TEST_DATABASE_URL is required. Refusing to run destructive tests against DATABASE_URL.',
+    );
+  }
+
+  // Start each test run from a clean slate against the dedicated TEST
+  // database/Redis ONLY — never the shared dev database, verified above.
   await prisma.$executeRawUnsafe(
     `TRUNCATE TABLE
       call_reports, calls,

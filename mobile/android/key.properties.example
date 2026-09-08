@@ -1,0 +1,14 @@
+# Copy this file to `key.properties` (same directory) and fill in your real
+# values. `key.properties` itself is gitignored and must NEVER be committed
+# — see android/.gitignore ("key.properties", "**/*.jks", "**/*.keystore").
+#
+# storeFile is resolved RELATIVE TO android/app/, so if your .jks lives at
+# android/app/upload-keystore.jks, just use its filename as shown below.
+#
+# See docs/STEP12_PROGRESS.md for the exact `keytool` command to generate a
+# real upload keystore, and for what to do with the resulting file/alias.
+
+storePassword=REPLACE_ME
+keyPassword=REPLACE_ME
+keyAlias=REPLACE_ME
+storeFile=upload-keystore.jks

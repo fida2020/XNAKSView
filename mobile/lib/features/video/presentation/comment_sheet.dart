@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/errors/app_exception.dart';
+import '../../../core/widgets/xnak_avatar.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../safety/domain/safety_models.dart';
+import '../../safety/presentation/report_sheet.dart';
 import '../domain/comment_model.dart';
 import '../domain/video_model.dart';
 import 'feed_controller.dart';
@@ -22,7 +25,6 @@ void showCommentSheet(
   );
 }
 
-const _reportReasons = ['SPAM', 'NUDITY_OR_SEXUAL_CONTENT', 'VIOLENCE', 'HARASSMENT_OR_BULLYING', 'HATE_SPEECH', 'MISINFORMATION', 'OTHER'];
 
 class _CommentSheet extends ConsumerStatefulWidget {
   const _CommentSheet({required this.video, required this.controllerProvider});
@@ -147,26 +149,12 @@ class _CommentSheetState extends ConsumerState<_CommentSheet> {
     }
   }
 
+  // Step 10 — routes through the normalized safety-report system
+  // (`showReportSheet`/`SafetyReport`) rather than the legacy per-type
+  // `VideoCommentReport` endpoint; see schema.prisma's `SafetyReport` doc
+  // comment on why new reports go through this path.
   Future<void> _report(CommentModel comment) async {
-    final reason = await showModalBottomSheet<String>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            for (final reason in _reportReasons)
-              ListTile(title: Text(reason.replaceAll('_', ' ')), onTap: () => Navigator.of(context).pop(reason)),
-          ],
-        ),
-      ),
-    );
-    if (reason == null) return;
-    try {
-      await ref.read(videoRepositoryProvider).reportComment(comment.id, reason: reason);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Reported. Thank you.')));
-    } on AppException catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
-    }
+    await showReportSheet(context, targetType: ReportTargetType.videoComment, targetId: comment.id, targetUserId: comment.userId);
   }
 
   Future<void> _toggleReplies(CommentModel comment) async {
@@ -249,28 +237,36 @@ class _CommentSheetState extends ConsumerState<_CommentSheet> {
                     ],
                   ),
                 ),
-              SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _textController,
-                          maxLength: 500,
-                          decoration: const InputDecoration(hintText: 'Add a comment…', border: OutlineInputBorder(), counterText: ''),
+              if (!widget.video.allowComments && ref.watch(authControllerProvider).userId != widget.video.userId)
+                const SafeArea(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('The creator has turned off comments for this video.', textAlign: TextAlign.center),
+                  ),
+                )
+              else
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _textController,
+                            maxLength: 500,
+                            decoration: const InputDecoration(hintText: 'Add a comment…', border: OutlineInputBorder(), counterText: ''),
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        icon: _isSubmitting
-                            ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Icon(Icons.send),
-                        onPressed: _isSubmitting ? null : _submit,
-                      ),
-                    ],
+                        IconButton(
+                          icon: _isSubmitting
+                              ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.send),
+                          onPressed: _isSubmitting ? null : _submit,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
         );
@@ -305,6 +301,7 @@ class _CommentSheetState extends ConsumerState<_CommentSheet> {
   Widget _buildCommentTile(CommentModel comment, String? currentUserId, {bool pinnedBadge = false}) {
     final isMine = comment.userId == currentUserId;
     return ListTile(
+      leading: XnakAvatar(avatarUrl: comment.avatarUrl, radius: 18),
       title: Row(
         children: [
           Flexible(child: Text(comment.authorLabel, style: const TextStyle(fontWeight: FontWeight.w600))),

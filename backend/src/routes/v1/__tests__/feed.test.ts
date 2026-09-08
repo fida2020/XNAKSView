@@ -84,4 +84,33 @@ describe('GET /api/v1/feed', () => {
       expect(response.status).toBe(400);
     });
   });
+
+  describe('scope=following and scope=friends', () => {
+    it('following shows a one-way followed creator; friends requires a real mutual follow', async () => {
+      const { response: viewerReg } = await registerUser();
+      const { response: oneWayCreatorReg } = await registerUser();
+      const { response: mutualCreatorReg } = await registerUser();
+
+      // Viewer follows both; only the mutual one follows back.
+      await request(app).post(`/api/v1/users/${oneWayCreatorReg.body.user.id}/follow`).set('Authorization', `Bearer ${viewerReg.body.accessToken}`);
+      await request(app).post(`/api/v1/users/${mutualCreatorReg.body.user.id}/follow`).set('Authorization', `Bearer ${viewerReg.body.accessToken}`);
+      await request(app).post(`/api/v1/users/${viewerReg.body.user.id}/follow`).set('Authorization', `Bearer ${mutualCreatorReg.body.accessToken}`);
+
+      const oneWayUpload = await uploadSampleVideo(oneWayCreatorReg.body.accessToken, { visibility: 'PUBLIC' });
+      await waitForVideoSettled(oneWayUpload.body.id, oneWayCreatorReg.body.accessToken);
+      const mutualUpload = await uploadSampleVideo(mutualCreatorReg.body.accessToken, { visibility: 'PUBLIC' });
+      await waitForVideoSettled(mutualUpload.body.id, mutualCreatorReg.body.accessToken);
+
+      const following = await request(app).get('/api/v1/feed?scope=following&limit=50').set('Authorization', `Bearer ${viewerReg.body.accessToken}`);
+      const followingIds = new Set(following.body.videos.map((v: { id: string }) => v.id));
+      expect(followingIds.has(oneWayUpload.body.id)).toBe(true);
+      expect(followingIds.has(mutualUpload.body.id)).toBe(true);
+
+      const friends = await request(app).get('/api/v1/feed?scope=friends&limit=50').set('Authorization', `Bearer ${viewerReg.body.accessToken}`);
+      const friendIds = new Set(friends.body.videos.map((v: { id: string }) => v.id));
+      // Only the REAL mutual follow counts as a friend — the one-way follow never does.
+      expect(friendIds.has(mutualUpload.body.id)).toBe(true);
+      expect(friendIds.has(oneWayUpload.body.id)).toBe(false);
+    });
+  });
 });

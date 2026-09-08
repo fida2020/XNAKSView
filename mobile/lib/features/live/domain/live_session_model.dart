@@ -29,6 +29,11 @@ class LiveSessionModel extends Equatable {
     this.isOwnSession,
     required this.startedAt,
     this.endedAt,
+    this.goalEnabled = false,
+    this.goalTitle,
+    this.goalTargetCoins,
+    this.goalProgressCoins = 0,
+    this.isVoiceOnly = false,
   });
 
   factory LiveSessionModel.fromJson(Map<String, dynamic> json) {
@@ -45,6 +50,11 @@ class LiveSessionModel extends Equatable {
       isOwnSession: json['isOwnSession'] as bool?,
       startedAt: DateTime.parse(json['startedAt'] as String),
       endedAt: json['endedAt'] == null ? null : DateTime.parse(json['endedAt'] as String),
+      goalEnabled: json['goalEnabled'] as bool? ?? false,
+      goalTitle: json['goalTitle'] as String?,
+      goalTargetCoins: json['goalTargetCoins'] as int?,
+      goalProgressCoins: json['goalProgressCoins'] as int? ?? 0,
+      isVoiceOnly: json['isVoiceOnly'] as bool? ?? false,
     );
   }
 
@@ -60,8 +70,13 @@ class LiveSessionModel extends Equatable {
   final bool? isOwnSession;
   final DateTime startedAt;
   final DateTime? endedAt;
+  final bool goalEnabled;
+  final String? goalTitle;
+  final int? goalTargetCoins;
+  final int goalProgressCoins;
+  final bool isVoiceOnly;
 
-  LiveSessionModel copyWith({int? viewerCount, LiveStatus? status, DateTime? endedAt}) {
+  LiveSessionModel copyWith({int? viewerCount, LiveStatus? status, DateTime? endedAt, int? goalProgressCoins}) {
     return LiveSessionModel(
       id: id,
       hostId: hostId,
@@ -70,6 +85,11 @@ class LiveSessionModel extends Equatable {
       category: category,
       thumbnailUrl: thumbnailUrl,
       status: status ?? this.status,
+      goalEnabled: goalEnabled,
+      goalTitle: goalTitle,
+      goalTargetCoins: goalTargetCoins,
+      goalProgressCoins: goalProgressCoins ?? this.goalProgressCoins,
+      isVoiceOnly: isVoiceOnly,
       viewerCount: viewerCount ?? this.viewerCount,
       peakViewerCount: peakViewerCount,
       isOwnSession: isOwnSession,

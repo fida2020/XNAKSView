@@ -46,7 +46,11 @@ model User {
   id           String  @id @default(uuid())
   email        String? @unique
   phone        String? @unique
-  passwordHash String
+  // Nullable: a social-only account (Google/Facebook, no phone/email+password
+  // ever set) legitimately has no password yet — `verifyPassword`/`/auth/login`
+  // treat a null hash as "password login not available for this account" (not
+  // an error), never as an empty-string match.
+  passwordHash String?
 
   dateOfBirth DateTime?
   ageVerified Boolean   @default(false)
@@ -82,10 +86,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profile       Profile?
-  verifications Verification[]
-  devices       Device[]
-  sessions      Session[]
+  profile        Profile?
+  verifications  Verification[]
+  devices        Device[]
+  sessions       Session[]
+  authIdentities AuthIdentity[]
 
   videos        Video[]
   videoLikes    VideoLike[]
@@ -130,6 +135,8 @@ model User {
   mentionsReceived Mention[]              @relation("MentionsReceived")
   reposts          Repost[]
   favorites        Favorite[]
+  epidemicSoundFavorites EpidemicSoundFavorite[]
+  epidemicSoundRecents   EpidemicSoundRecent[]
   commentLikes     VideoCommentLike[]
   commentReports   VideoCommentReport[]
   activityReceived ActivityNotification[] @relation("ActivityRecipient")
@@ -151,6 +158,63 @@ model User {
   storyViews   StoryView[]
   storyReplies StoryReply[]
   storyReports StoryReport[]
+
+  coinWallet           CoinWallet?
+  coinPurchases        CoinPurchase[]
+  exchangeRatesCreated ExchangeRate[]
+  giftsSent            GiftTransaction[] @relation("GiftsSent")
+  giftsReceived        GiftTransaction[] @relation("GiftsReceived")
+
+  diamondWallet                       CreatorDiamondWallet?
+  diamondEarnRatesCreated             DiamondEarnRate[]             @relation("DiamondEarnRatesCreated")
+  diamondRewardRatesCreated           DiamondRewardRate[]           @relation("DiamondRewardRatesCreated")
+  earningsWallet                      CreatorEarningsWallet?
+  earningsCoinExchanges               EarningsCoinExchange[]
+  withdrawals                         Withdrawal[]
+  payoutMethod                        CreatorPayoutMethod?
+  monetizationEligibilityRulesCreated MonetizationEligibilityRule[] @relation("MonetizationEligibilityRulesCreated")
+  adRevenueShareRulesCreated          AdRevenueShareRule[]          @relation("AdRevenueShareRulesCreated")
+  creatorMonetization                 CreatorMonetization?
+  creatorMonetizationStatusUpdates    CreatorMonetization[]         @relation("CreatorMonetizationStatusUpdatedBy")
+  adRevenueEvents                     AdRevenueEvent[]
+  withdrawalsReviewed                 Withdrawal[]                  @relation("WithdrawalsReviewed")
+  fraudHoldsAgainst                   FraudHold[]                   @relation("FraudHoldsAgainst")
+  fraudHoldsCreated                   FraudHold[]                   @relation("FraudHoldsCreated")
+  fraudHoldsReleased                  FraudHold[]                   @relation("FraudHoldsReleased")
+  financialAuditLogs                  FinancialAuditLog[]           @relation("FinancialAuditLogsByActor")
+  platformRevenueRulesCreated         PlatformRevenueRule[]         @relation("PlatformRevenueRulesCreated")
+
+  // Step 10 — AI-first Trust & Safety (see the block at the end of this file).
+  moderationEventsAgainst    ModerationEvent[]    @relation("ModerationEventsAgainst")
+  enforcementActionsAgainst  EnforcementAction[]  @relation("EnforcementActionsAgainst")
+  enforcementActionsCreated  EnforcementAction[]  @relation("EnforcementActionsCreated")
+  enforcementActionsReversed EnforcementAction[]  @relation("EnforcementActionsReversed")
+  appealsSubmitted           Appeal[]             @relation("AppealsSubmitted")
+  appealsDecided             Appeal[]             @relation("AppealsDecided")
+  safetyReportsMade          SafetyReport[]       @relation("SafetyReportsMade")
+  safetyReportsAgainst       SafetyReport[]       @relation("SafetyReportsAgainst")
+  safetyReportsReviewed      SafetyReport[]       @relation("SafetyReportsReviewed")
+  riskAssessmentsAgainst     RiskAssessment[]     @relation("RiskAssessmentsAgainst")
+  identityTrustSignal        IdentityTrustSignal?
+
+  // Step 11 — Levels, Teams & Gamification (see the block at the end of this file).
+  userLevel                  UserLevel?
+  creatorLevel               CreatorLevel?
+  xpEvents                   XPEvent[]
+  levelUpEvents              LevelUpEvent[]
+  fanClubOwned               FanClub?                   @relation("FanClubOwner")
+  fanClubMemberships         FanClubMembership[]
+  streaks                    Streak[]
+  teamsOwned                 Team[]                     @relation("TeamOwner")
+  teamMemberships            TeamMember[]
+  teamInvitesReceived        TeamInvite[]               @relation("TeamInviteInvitee")
+  teamInvitesSent            TeamInvite[]               @relation("TeamInviteInviter")
+  teamActivityEntries        TeamActivityEntry[]
+  userBadges                 UserBadge[]
+  userAchievements           UserAchievement[]
+  gamificationConfigsCreated GamificationConfig[]       @relation("GamificationConfigCreatedBy")
+  gamificationAuditLogsActor GamificationAuditLog[]     @relation("GamificationAuditActor")
+  gamificationNotifications  GamificationNotification[]
 
   @@index([status])
   @@map("users")
@@ -177,6 +241,61 @@ model Profile {
   @@map("profiles")
 }
 
+enum OtpChannel {
+  SMS
+  EMAIL
+}
+
+enum OtpPurpose {
+  REGISTER
+  LOGIN
+  PASSWORD_RESET
+}
+
+// A real, server-generated 6-digit code — never a client-side/hardcoded
+// value (see `lib/otpService.ts`/`lib/otpProviders.ts`). `identifier` is a
+// bare phone/email string, not a `User` relation, since REGISTER challenges
+// are created before any account exists. `codeHash` is an HMAC, never the
+// plaintext code — nothing in this codebase, including logs, ever persists
+// or prints the real code. One row is reused across resends for the same
+// identifier+purpose (a resend updates it in place rather than creating a
+// new row), so `attempts`/`sendCount`/`lastSentAt` cleanly enforce "max
+// verification attempts" and "resend throttling" against a single record.
+model OtpChallenge {
+  id String @id @default(uuid())
+
+  identifier String
+  channel    OtpChannel
+  purpose    OtpPurpose
+
+  codeHash String
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(5)
+
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  // Set once this challenge's verification token has actually been redeemed
+  // by a successful `/auth/register` call — defense in depth against token
+  // replay, on top of the `User.email`/`User.phone` unique constraint that
+  // already prevents a second real account from the same identifier.
+  registrationConsumedAt DateTime?
+
+  lastSentAt DateTime @default(now())
+  sendCount  Int      @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([identifier, purpose, consumedAt])
+  @@map("otp_challenges")
+}
+
+// Step 9 — `verificationType: IDENTITY_DOCUMENT` rows are XNAKView's real
+// creator-payout KYC state (see `lib/payout/identityVerificationProvider.ts`).
+// This table existed since Step 1 but nothing ever populated it; the extra
+// fields below are additive and only meaningful for IDENTITY_DOCUMENT rows.
 model Verification {
   id String @id @default(uuid())
 
@@ -186,6 +305,14 @@ model Verification {
   status           VerificationStatus @default(PENDING)
   verificationType VerificationType
 
+  // KYC-provider fields (IDENTITY_DOCUMENT only) — null for EMAIL/PHONE/AGE.
+  provider            String?
+  providerReferenceId String?
+  country             String?
+  hostedUrl           String?
+  rejectionReason     String?
+  rawStatusPayload    Json?
+
   verifiedAt DateTime?
 
   createdAt DateTime @default(now())
@@ -193,6 +320,7 @@ model Verification {
 
   @@index([userId, verificationType])
   @@index([status])
+  @@index([providerReferenceId])
   @@map("verifications")
 }
 
@@ -234,6 +362,37 @@ model Session {
   @@index([expiresAt])
   @@index([deviceId])
   @@map("sessions")
+}
+
+enum AuthProvider {
+  GOOGLE
+  FACEBOOK
+}
+
+// A verified Google/Facebook identity linked to a `User` — a user may have
+// zero, one, or multiple of these alongside a password/phone/email,
+// never a separate "social account" record (brief: "must not create
+// duplicate XNAKView accounts"). `provider`+`providerAccountId` is the
+// provider's own stable subject id (Google's `sub`, Facebook's `id`) —
+// never the email, since an email can change on the provider's side but
+// the subject id never does. `email` here is a snapshot of what the
+// provider reported as verified at the moment of linking, kept only for
+// display/audit, never re-trusted as current truth.
+model AuthIdentity {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider          AuthProvider
+  providerAccountId String
+  email             String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("auth_identities")
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +462,21 @@ model Video {
   allowDuet     Boolean @default(true)
   allowStitch   Boolean @default(true)
   allowDownload Boolean @default(true)
+  // Video editor rebuild — creator-controlled comment eligibility, checked
+  // server-side on every comment POST (routes/v1/videos.ts), same pattern
+  // as allowDuet/allowStitch/allowDownload above.
+  allowComments Boolean @default(true)
+  // Step 7: creator-controlled Video Gift eligibility, checked server-side
+  // on every Gift send — never inferred or trusted from the client.
+  allowGifts    Boolean @default(true)
+
+  // Video editor rebuild — the validated edit spec (trim/speed/filter/text
+  // overlays/rotate/cover time/added-audio volumes) applied at render time,
+  // persisted so a retried processing attempt (see lib/videoProcessing.ts)
+  // reproduces the exact same edit rather than silently falling back to a
+  // plain transcode. Null for a video posted through a path that has no
+  // editor (Duet/Stitch/Add Yours), which keep their own existing pipeline.
+  editSpec Json?
 
   // Duet/Stitch lineage — a Duet/Stitch is an ordinary Video row that also
   // points back at the video it was made from, rather than a separate
@@ -359,6 +533,7 @@ model Video {
   favorites             Favorite[]
   playlistItems         CreatorPlaylistItem[]
   activityNotifications ActivityNotification[]
+  adRevenueEvents       AdRevenueEvent[]
 
   @@index([userId, status, createdAt])
   @@index([status, visibility, createdAt])
@@ -474,6 +649,11 @@ model VideoView {
   @@map("video_views")
 }
 
+// Self-follow is rejected at the application layer (routes/v1/follow.ts,
+// before any write) AND at the database layer — a raw-SQL CHECK constraint
+// `follows_no_self_follow` (`followerId <> followingId`, migration
+// 20260908020000) isn't expressible in this schema's declarative syntax but
+// is real and enforced; see that migration's own comment.
 model Follow {
   id String @id @default(uuid())
 
@@ -572,22 +752,45 @@ model LiveSession {
   replayStatus  LiveReplayStatus @default(NONE)
   replayKey     String?
 
+  // LIVE Goal (Step 3/rebuild) — a real, event-driven Coin-spend target set
+  // by the host before going LIVE. Progress is incremented server-side, in
+  // the same transaction as every real LIVE Gift send (lib/giftService.ts),
+  // by that Gift's actual totalCoins — never a client-reported or timer-
+  // simulated value. Optional: goalEnabled stays false unless the host set
+  // a real target when starting the session.
+  goalEnabled        Boolean @default(false)
+  goalTitle          String?
+  goalTargetCoins    Int?
+  goalProgressCoins  Int     @default(0)
+
+  // Voice Chat LIVE mode — a real, persisted session-type flag (not a
+  // purely client-side choice) so a viewer joining fresh, or a fresh
+  // discovery listing, correctly renders "audio-only" instead of
+  // indefinitely waiting for a video track that will never arrive. The
+  // host's client never actually publishes a camera track when this is true
+  // (see LiveHostScreen's voiceOnly param) — LiveKit natively supports an
+  // audio-only participant with no custom pipeline required.
+  isVoiceOnly Boolean @default(false)
+
   startedAt DateTime  @default(now())
   endedAt   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  viewers       LiveViewer[]
-  chatMessages  LiveChatMessage[]
-  reports       LiveReport[]
-  viewerReports LiveViewerReport[]
-  event         LiveEvent?
-  moderators    LiveModerator[]
-  restrictions  LiveViewerRestriction[]
-  guestSlots    LiveGuestSlot[]
-  matchesAsA    LiveMatch[]             @relation("MatchSessionA")
-  matchesAsB    LiveMatch[]             @relation("MatchSessionB")
+  viewers              LiveViewer[]
+  chatMessages         LiveChatMessage[]
+  reports              LiveReport[]
+  viewerReports        LiveViewerReport[]
+  event                LiveEvent?
+  moderators           LiveModerator[]
+  restrictions         LiveViewerRestriction[]
+  guestSlots           LiveGuestSlot[]
+  matchesAsA           LiveMatch[]                @relation("MatchSessionA")
+  matchesAsB           LiveMatch[]                @relation("MatchSessionB")
+  matchTeamMemberships LiveMatchTeamMember[]      @relation("MatchTeamMemberSession")
+  giftTransactions     GiftTransaction[]
+  giftAttributions     LiveGiftAttributionEntry[]
 
   @@index([status, startedAt])
   @@index([hostId])
@@ -847,20 +1050,35 @@ model LiveGuestSlot {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  giftAttributions LiveGiftAttributionEntry[]
+
   @@unique([liveSessionId, userId])
   @@index([liveSessionId, status])
   @@map("live_guest_slots")
 }
 
 // LIVE Match / Battle — pairs two hosts' own LiveSessions against each
-// other. Deliberately has no Coins/Gifts fields yet; viewer "support" for a
-// side and score contribution are a later step's concern once Coins/Gifts
-// exist (see docs/STEP4_PROGRESS.md for the planned event-interface hook).
+// other. Step 7: a Gift sent while a session is mid-Match contributes to
+// that session's side via `LiveGiftAttributionEntry.scoreContribution`
+// (see below) — `scoreA`/`scoreB` are still plain match-score integers,
+// never a wallet balance; the financial ledger stays fully separate.
 enum LiveMatchStatus {
   PENDING
   ACTIVE
   ENDED
   CANCELLED
+}
+
+// SOLO = exactly the original 1v1 host battle (`sessionA`/`sessionB` only,
+// untouched). TEAM = `sessionA`/`sessionB` are each side's CAPTAIN (the
+// challenger and the challenged host — same PENDING→ACTIVE consent flow as
+// SOLO), and additional hosts can join either side as `LiveMatchTeamMember`
+// rows. `scoreA`/`scoreB` remain single per-side counters either way — a
+// team's score is the SUM of Gift contributions from every session on that
+// side (captain + all ACTIVE team members), never tracked per-member.
+enum LiveMatchType {
+  SOLO
+  TEAM
 }
 
 model LiveMatch {
@@ -870,6 +1088,8 @@ model LiveMatch {
   sessionA   LiveSession @relation("MatchSessionA", fields: [sessionAId], references: [id], onDelete: Cascade)
   sessionBId String
   sessionB   LiveSession @relation("MatchSessionB", fields: [sessionBId], references: [id], onDelete: Cascade)
+
+  matchType LiveMatchType @default(SOLO)
 
   status LiveMatchStatus @default(PENDING)
 
@@ -885,8 +1105,57 @@ model LiveMatch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  giftAttributions LiveGiftAttributionEntry[]
+  teamMembers      LiveMatchTeamMember[]
+
   @@index([status])
   @@map("live_matches")
+}
+
+enum LiveMatchSide {
+  A
+  B
+}
+
+// Same invite/accept/decline/remove/leave lifecycle shape as
+// `LiveGuestSlot` (brief: guests are real participants, not viewers) —
+// deliberately a separate model rather than overloading `LiveGuestSlot`,
+// since a team member's "session" is a full independent LIVE broadcast
+// (its own host, its own viewers), not a guest slot inside someone else's
+// stream.
+enum LiveMatchTeamMemberStatus {
+  INVITED
+  ACTIVE
+  DECLINED
+  REMOVED
+  LEFT
+}
+
+model LiveMatchTeamMember {
+  id String @id @default(uuid())
+
+  matchId String
+  match   LiveMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  liveSessionId String
+  liveSession   LiveSession @relation("MatchTeamMemberSession", fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  side LiveMatchSide
+
+  status LiveMatchTeamMemberStatus @default(INVITED)
+
+  invitedById String
+
+  respondedAt DateTime?
+  joinedAt    DateTime?
+  leftAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([matchId, liveSessionId])
+  @@index([matchId, side, status])
+  @@map("live_match_team_members")
 }
 
 // Fan/subscriber foundation — deliberately has no payment/billing fields.
@@ -1410,6 +1679,47 @@ model Sound {
   @@map("sounds")
 }
 
+// Real licensed music catalog (Epidemic Sound Partner Content API —
+// lib/epidemicSound.ts) — a separate track universe from `Sound` above
+// (which is always "reused audio extracted from another XNAKView video").
+// `trackTitle`/`trackArtist` are denormalized at write time so listing a
+// user's Favorites/Recents never needs an extra upstream API call just to
+// render a title.
+model EpidemicSoundFavorite {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  trackId     String
+  trackTitle  String
+  trackArtist String
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, trackId])
+  @@map("epidemic_sound_favorites")
+}
+
+// Real usage-based "Recent" — a row is written only when a track is
+// actually attached to a real posted video (see routes/v1/videos.ts), never
+// on mere preview/browse.
+model EpidemicSoundRecent {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  trackId     String
+  trackTitle  String
+  trackArtist String
+
+  usedAt DateTime @default(now())
+
+  @@unique([userId, trackId])
+  @@map("epidemic_sound_recents")
+}
+
 // ---------------------------------------------------------------------------
 // Photo posts / carousels (Step 6, brief A) — 2-35 swipeable images
 // (TikTok's current Photo Mode), a separate content type from Video rather
@@ -1709,4 +2019,2053 @@ model StoryReport {
   @@unique([storyId, reporterId])
   @@index([status])
   @@map("story_reports")
+}
+
+// ---------------------------------------------------------------------------
+// Coins & Virtual Gifts (Step 7) — TikTok-parity functional flow, XNAKView's
+// own locked economics: 1 Coin = PKR 1.50 (never changes), paid for in USD,
+// PKR/USD exchange rate configurable and snapshotted per purchase. Coins are
+// never withdrawable/transferable/sellable — see lib/coinLedger.ts and
+// lib/paymentProviders.ts for the server-authoritative enforcement.
+// ---------------------------------------------------------------------------
+
+enum PaymentProviderType {
+  APP_STORE
+  GOOGLE_PLAY
+  WEB
+}
+
+enum CoinPurchaseStatus {
+  CREATED
+  PENDING
+  PAID
+  COINS_CREDITED
+  FAILED
+  CANCELLED
+  REFUNDED
+  CHARGEBACK
+}
+
+enum CoinLedgerDirection {
+  CREDIT
+  DEBIT
+}
+
+enum CoinLedgerEntryType {
+  PURCHASE
+  GIFT_SENT
+  REFUND
+  ADJUSTMENT
+  // Earnings → Coins (never a separate invented Diamond→Coin rate) — see
+  // `EarningsCoinExchange` and `lib/earningsExchangeService.ts`.
+  EARNINGS_EXCHANGE
+}
+
+enum GiftCategory {
+  APPRECIATION
+  PREMIUM
+  CELEBRATION
+  LIVE
+  SPECIAL
+}
+
+enum GiftContentType {
+  LIVE
+  VIDEO
+  PHOTO_POST
+  TEXT_POST
+}
+
+// A history of PKR/USD rates, never mutated once created — "current rate" is
+// always the most recently created row. Changing the rate never touches any
+// existing `CoinPurchase`, which already snapshotted the rate it used.
+model ExchangeRate {
+  id String @id @default(uuid())
+
+  pkrPerUsd Decimal @db.Decimal(10, 4)
+
+  createdAt   DateTime @default(now())
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  coinExchanges EarningsCoinExchange[]
+
+  @@index([createdAt])
+  @@map("exchange_rates")
+}
+
+// One row per creator-initiated "Exchange to Coins" action — the eligible
+// cash-equivalent Earnings balance (itself already the product of Diamonds
+// × the configured DiamondRewardRate) converted into XNAKView Coins via the
+// SAME locked COIN_VALUE_PKR and live PKR/USD ExchangeRate used everywhere
+// else in this economy. Never a separate invented Diamond→Coin rate — the
+// authoritative chain is always Diamonds → DiamondRewardRate → Earnings
+// (USD) → ExchangeRate → COIN_VALUE_PKR → Coins. Immutable and append-only,
+// snapshotting exactly which rate/version was used so the math can always
+// be reconstructed later even after the live ExchangeRate has since changed.
+model EarningsCoinExchange {
+  id String @id @default(uuid())
+
+  creatorId String
+  creator   User   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  amountMinorUnits Int
+  currency         String
+
+  exchangeRateId       String
+  exchangeRate         ExchangeRate @relation(fields: [exchangeRateId], references: [id], onDelete: Restrict)
+  pkrPerUsdSnapshot    Decimal      @db.Decimal(10, 4)
+  coinValuePkrSnapshot Decimal      @db.Decimal(10, 2)
+
+  coinsCredited Int
+
+  idempotencyKey String @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([creatorId, createdAt])
+  @@map("earnings_coin_exchanges")
+}
+
+// Admin-configured USD price tiers. `coinAmount`/`totalUsdPrice` are
+// deliberately NOT stored here — they are always derived from
+// `baseUsdPrice`/`taxUsd`/`feeUsd` and the CURRENT `ExchangeRate` at read
+// time (see lib/coinEconomy.ts), so a package always reflects today's rate
+// without an admin having to touch every package whenever the rate changes.
+// A completed `CoinPurchase` freezes its own snapshot independently.
+model CoinPackage {
+  id String @id @default(uuid())
+
+  baseUsdPrice Decimal @db.Decimal(10, 2)
+  taxUsd       Decimal @default(0) @db.Decimal(10, 2)
+  feeUsd       Decimal @default(0) @db.Decimal(10, 2)
+
+  active    Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchases CoinPurchase[]
+
+  @@index([active, sortOrder])
+  @@map("coin_packages")
+}
+
+// One row per user — the single source of truth for spendable balance.
+// Every change to `balance` happens exclusively through lib/coinLedger.ts's
+// atomic, row-locked transaction helpers, alongside a matching
+// `CoinLedgerEntry`; nothing else in the codebase should write this column.
+model CoinWallet {
+  id String @id @default(uuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  balance Int @default(0)
+
+  // Optional self-set daily Gift-spending cap (current TikTok's personal
+  // spending-limit feature) — a user opt-in budgeting control, not a
+  // platform-mandated cap (no such mandatory limit is current TikTok
+  // behavior per verification). Null means no limit.
+  dailyGiftLimitCoins Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ledgerEntries CoinLedgerEntry[]
+
+  @@map("coin_wallets")
+}
+
+// Immutable, append-only — a row is never updated or deleted after
+// creation. `idempotencyKey` is unique so the same underlying event (a
+// purchase credit, a gift debit) can never be double-applied even under
+// retries/concurrent requests; `beforeBalance`/`afterBalance` make every
+// entry independently auditable against the wallet's balance history.
+model CoinLedgerEntry {
+  id String @id @default(uuid())
+
+  walletId String
+  wallet   CoinWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  direction CoinLedgerDirection
+  type      CoinLedgerEntryType
+  amount    Int
+
+  beforeBalance Int
+  afterBalance  Int
+
+  // Polymorphic reference (e.g. "CoinPurchase"/that row's id, or
+  // "GiftTransaction"/that row's id) — a plain string pair rather than a
+  // real FK, since it points at different tables depending on `type`.
+  referenceType String?
+  referenceId   String?
+
+  idempotencyKey String  @unique
+  notes          String?
+
+  createdAt DateTime @default(now())
+
+  @@index([walletId, createdAt])
+  @@index([referenceType, referenceId])
+  @@map("coin_ledger_entries")
+}
+
+// One row per purchase attempt. Every pricing field is a frozen snapshot
+// taken at creation time (brief's explicit "exchange rate snapshot"
+// requirement) — later admin changes to `CoinPackage`/`ExchangeRate` never
+// alter an existing `CoinPurchase`. Coins are only ever credited (via
+// lib/coinLedger.ts) after `status` genuinely reaches PAID through real
+// provider verification — never from a client-reported success alone.
+model CoinPurchase {
+  id String @id @default(uuid())
+
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  packageId String
+  package   CoinPackage @relation(fields: [packageId], references: [id], onDelete: Restrict)
+
+  baseUsdPrice          Decimal @db.Decimal(10, 2)
+  taxUsd                Decimal @db.Decimal(10, 2)
+  feeUsd                Decimal @db.Decimal(10, 2)
+  totalUsdPrice         Decimal @db.Decimal(10, 2)
+  exchangeRatePkrPerUsd Decimal @db.Decimal(10, 4)
+  coinValuePkr          Decimal @default(1.50) @db.Decimal(10, 4)
+  coinAmount            Int
+
+  provider              PaymentProviderType
+  providerTransactionId String?             @unique
+  status                CoinPurchaseStatus  @default(CREATED)
+  idempotencyKey        String              @unique
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  paidAt     DateTime?
+  creditedAt DateTime?
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("coin_purchases")
+}
+
+// Server-controlled catalog — a Gift's `coinCost` is never trusted from the
+// client; every send re-reads it here at the moment of sending.
+model Gift {
+  id String @id @default(uuid())
+
+  name     String
+  slug     String @unique
+  coinCost Int
+
+  thumbnailKey      String?
+  animationAssetKey String?
+
+  category           GiftCategory
+  sortOrder          Int          @default(0)
+  active             Boolean      @default(true)
+  maxQuantityPerSend Int          @default(99)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions GiftTransaction[]
+
+  @@index([active, sortOrder])
+  @@map("gifts")
+}
+
+// A Gift send is a consumption event, not a wallet-to-wallet transfer — the
+// sender's Coins are debited via a `CoinLedgerEntry`; the recipient never
+// receives Coins or money directly, only a Diamond credit (see
+// `CreatorDiamondLedgerEntry`) — TikTok's actual functional separation
+// (Coins ≠ Diamonds ≠ cash), not a simplified direct-transfer model.
+// `coinCost` here is a snapshot of `Gift.coinCost` at send time,
+// independent of later catalog price changes.
+model GiftTransaction {
+  id String @id @default(uuid())
+
+  senderId    String
+  sender      User   @relation("GiftsSent", fields: [senderId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   User   @relation("GiftsReceived", fields: [recipientId], references: [id], onDelete: Cascade)
+  giftId      String
+  gift        Gift   @relation(fields: [giftId], references: [id], onDelete: Restrict)
+
+  coinCost   Int
+  quantity   Int
+  totalCoins Int
+
+  contentType GiftContentType?
+  contentId   String?
+
+  liveSessionId String?
+  liveSession   LiveSession? @relation(fields: [liveSessionId], references: [id], onDelete: SetNull)
+
+  idempotencyKey String @unique
+
+  createdAt DateTime @default(now())
+
+  diamondLedgerEntry   CreatorDiamondLedgerEntry?
+  liveAttributionEntry LiveGiftAttributionEntry?
+  platformRevenueEntry PlatformRevenueLedgerEntry?
+
+  @@index([senderId, createdAt])
+  @@index([recipientId, createdAt])
+  @@index([liveSessionId])
+  @@map("gift_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// LIVE Gift attribution (Step 7 correction) — a LIVE Gift is never
+// automatically credited to the host. The server determines the actual
+// receiving participant (host, co-host, or a specific guest seat) from
+// real, current LIVE session/guest-slot/Match state at the moment the Gift
+// is sent — see routes/v1/gifts.ts — and records that determination here,
+// immutably, alongside the LIVE Match/Battle score contribution if the
+// session was mid-Battle. `GiftTransaction.recipientId` is always set to
+// whichever participant this entry attributes the Gift to; nothing ever
+// credits Diamonds to anyone this row doesn't name.
+// ---------------------------------------------------------------------------
+
+enum LiveGiftParticipantRole {
+  HOST
+  CO_HOST
+  GUEST
+}
+
+model LiveGiftAttributionEntry {
+  id String @id @default(uuid())
+
+  giftTransactionId String          @unique
+  giftTransaction   GiftTransaction @relation(fields: [giftTransactionId], references: [id], onDelete: Cascade)
+
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  attributedParticipantId String
+  participantRole         LiveGiftParticipantRole
+
+  // Set only when the Gift was attributed to a guest/co-host seat, not the
+  // host — the specific `LiveGuestSlot` row that was ACTIVE at send time,
+  // so a later seat change or reconnect never retroactively changes who
+  // this historical Gift belonged to.
+  liveGuestSlotId String?
+  liveGuestSlot   LiveGuestSlot? @relation(fields: [liveGuestSlotId], references: [id], onDelete: SetNull)
+
+  // Set only when the session was part of an active LIVE Match/Battle at
+  // send time. `matchSide` ("A"/"B") records which side this Gift's value
+  // was credited to; `scoreContribution` is the exact amount added to that
+  // side's score, frozen here even if `LiveMatch.scoreA/scoreB` keeps
+  // changing afterward.
+  liveMatchId       String?
+  liveMatch         LiveMatch? @relation(fields: [liveMatchId], references: [id], onDelete: SetNull)
+  matchSide         String?
+  scoreContribution Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([liveSessionId, createdAt])
+  @@index([liveMatchId])
+  @@map("live_gift_attribution_entries")
+}
+
+// A platform-share policy, versioned and effective-dated — NEVER an
+// asserted real TikTok percentage (TikTok does not publicly disclose its
+// exact creator payout algorithm; see docs/STEP7_PROGRESS.md). Admin sets
+// XNAKView's own number here; every Gift snapshots which rule row it used,
+// so a later policy change never rewrites historical accounting.
+model PlatformRevenueRule {
+  id String @id @default(uuid())
+
+  platformSharePercent     Decimal @db.Decimal(5, 2)
+  creatorRewardDescription String?
+  applicableContext        String  @default("GIFT")
+
+  effectiveFrom  DateTime  @default(now())
+  effectiveUntil DateTime?
+  active         Boolean   @default(true)
+
+  createdAt   DateTime @default(now())
+  createdById String
+  createdBy   User     @relation("PlatformRevenueRulesCreated", fields: [createdById], references: [id], onDelete: Cascade)
+
+  revenueEntries PlatformRevenueLedgerEntry[]
+
+  @@index([active, effectiveFrom])
+  @@map("platform_revenue_rules")
+}
+
+// One row per Gift — the immutable split of that Gift's Coin value between
+// "platform share" (kept, never converted to Diamonds) and "creator share"
+// (the portion that feeds `DiamondEarnRate` to credit the attributed
+// participant's Diamond wallet).
+model PlatformRevenueLedgerEntry {
+  id String @id @default(uuid())
+
+  giftTransactionId String              @unique
+  giftTransaction   GiftTransaction     @relation(fields: [giftTransactionId], references: [id], onDelete: Cascade)
+  ruleId            String
+  rule              PlatformRevenueRule @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+
+  totalCoins         Int
+  platformShareCoins Int
+  creatorShareCoins  Int
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("platform_revenue_ledger_entries")
+}
+
+// ---------------------------------------------------------------------------
+// Diamonds — creator-side popularity/reward units, distinct from Coins and
+// from cash. Diamonds are never purchasable, never sendable, and never
+// user-transferable; the only way a balance changes is a server-computed
+// credit from an eligible Gift (see lib/diamondLedger.ts), or an admin
+// adjustment. This mirrors TikTok's actual three-tier separation
+// (Coins ≠ Diamonds ≠ cash) rather than collapsing Gift value straight
+// into a spendable/withdrawable balance.
+// ---------------------------------------------------------------------------
+
+enum DiamondLedgerDirection {
+  CREDIT
+  DEBIT
+}
+
+enum DiamondSourceType {
+  LIVE_GIFT
+  VIDEO_GIFT
+  ADJUSTMENT
+}
+
+model CreatorDiamondWallet {
+  id String @id @default(uuid())
+
+  creatorId String @unique
+  creator   User   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  balance Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ledgerEntries CreatorDiamondLedgerEntry[]
+
+  @@map("creator_diamond_wallets")
+}
+
+// Immutable, append-only, same posture as `CoinLedgerEntry` — every Diamond
+// change is auditable back to the exact Gift (or admin action) that caused
+// it, and `idempotencyKey` guarantees a Gift can never double-credit
+// Diamonds even under a retried request.
+model CreatorDiamondLedgerEntry {
+  id String @id @default(uuid())
+
+  walletId String
+  wallet   CreatorDiamondWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  direction  DiamondLedgerDirection
+  sourceType DiamondSourceType
+
+  giftTransactionId String?          @unique
+  giftTransaction   GiftTransaction? @relation(fields: [giftTransactionId], references: [id], onDelete: SetNull)
+
+  diamonds      Int
+  beforeBalance Int
+  afterBalance  Int
+
+  idempotencyKey String  @unique
+  notes          String?
+
+  createdAt DateTime @default(now())
+
+  @@index([walletId, createdAt])
+  @@map("creator_diamond_ledger_entries")
+}
+
+// How many Coins spent on a Gift become one Diamond — append-only history,
+// same "most recent row is current, never edit an old one" pattern as
+// `ExchangeRate`, so a Gift's Diamond credit is always computed with
+// whatever rate was current the moment it was sent (frozen implicitly by
+// when the ledger entry was written, never recalculated later).
+model DiamondEarnRate {
+  id String @id @default(uuid())
+
+  coinsPerDiamond Decimal @db.Decimal(10, 4)
+
+  createdAt   DateTime @default(now())
+  createdById String
+  createdBy   User     @relation("DiamondEarnRatesCreated", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@map("diamond_earn_rates")
+}
+
+// How many Diamonds convert into how much of a real-world reward currency
+// — an explicit XNAKView business decision, never an assumed 1 Diamond = $1.
+// Effective-dated (not just "most recent"), since a payout policy change
+// may need to be scheduled rather than immediate, and a policy is only
+// ever superseded, never edited in place.
+model DiamondRewardRate {
+  id String @id @default(uuid())
+
+  diamondsRequired Int
+  rewardCurrency   String
+  rewardAmount     Decimal @db.Decimal(12, 4)
+
+  effectiveFrom  DateTime  @default(now())
+  effectiveUntil DateTime?
+  active         Boolean   @default(true)
+
+  createdAt   DateTime @default(now())
+  createdById String
+  createdBy   User     @relation("DiamondRewardRatesCreated", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([active, effectiveFrom])
+  @@map("diamond_reward_rates")
+}
+
+// ---------------------------------------------------------------------------
+// Creator Earnings — the cash-equivalent ledger a Diamond balance can
+// eventually feed into, kept entirely separate from `CreatorDiamondWallet`
+// (brief's explicit "never mix these two ledgers"). Step 7 builds this
+// foundation and a real `Withdrawal` request/review lifecycle; it does NOT
+// integrate a real payout provider (Step 8/9) — see lib/withdrawalService.ts.
+// ---------------------------------------------------------------------------
+
+enum EarningsLedgerDirection {
+  CREDIT
+  DEBIT
+}
+
+enum EarningsLedgerEntryType {
+  DIAMOND_REWARD
+  WITHDRAWAL_HOLD
+  WITHDRAWAL_REVERSAL
+  ADJUSTMENT
+  // Earnings → Coins, the creator-chosen alternative to Withdraw. See
+  // `EarningsCoinExchange` and `lib/earningsExchangeService.ts`.
+  EXCHANGE_TO_COINS
+  // Step 8 — a creator's confirmed share of actual ad revenue (only ever
+  // credited while the creator's monetization status is ACTIVE at the
+  // moment the event is recorded). See `AdRevenueEvent` and
+  // `lib/adRevenueService.ts`.
+  AD_REVENUE
+  // A reversal/chargeback clawing back a previously-credited AD_REVENUE
+  // amount — never an edit to the original credit.
+  AD_REVENUE_REVERSAL
+}
+
+model CreatorEarningsWallet {
+  id String @id @default(uuid())
+
+  creatorId String @unique
+  creator   User   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  // Integer minor units (e.g. cents) — never a float — of `currency`.
+  balanceMinorUnits Int    @default(0)
+  currency          String @default("USD")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ledgerEntries CreatorEarningsLedgerEntry[]
+  withdrawals   Withdrawal[]
+
+  @@map("creator_earnings_wallets")
+}
+
+model CreatorEarningsLedgerEntry {
+  id String @id @default(uuid())
+
+  walletId String
+  wallet   CreatorEarningsWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  direction EarningsLedgerDirection
+  type      EarningsLedgerEntryType
+
+  amountMinorUnits Int
+  currency         String
+
+  beforeBalance Int
+  afterBalance  Int
+
+  referenceType String?
+  referenceId   String?
+
+  idempotencyKey String  @unique
+  notes          String?
+
+  createdAt DateTime @default(now())
+
+  @@index([walletId, createdAt])
+  @@index([referenceType, referenceId])
+  @@map("creator_earnings_ledger_entries")
+}
+
+enum WithdrawalStatus {
+  REQUESTED
+  REVIEWING
+  APPROVED
+  PROCESSING
+  PAID
+  REJECTED
+  FAILED
+  CANCELLED
+}
+
+// BANK_TRANSFER/JAZZCASH/EASYPAISA were Step 7/8 architecture-only values
+// (brief §12/§26) — kept only so any historical rows keep resolving; every
+// withdrawal created by Step 9's automatic pipeline uses AIRWALLEX, since
+// the actual local rail/clearing network within a country is chosen
+// automatically by the provider, never picked by the creator. See
+// `lib/payout/payoutProvider.ts`.
+enum PayoutProviderType {
+  BANK_TRANSFER
+  JAZZCASH
+  EASYPAISA
+  AIRWALLEX
+  PAYONEER
+}
+
+// A withdrawal REQUEST immediately places a hold on the requested amount
+// (a `WITHDRAWAL_HOLD` debit in the earnings ledger, brief's "prevent
+// balance manipulation") — the funds aren't available for a second
+// withdrawal request while this one is outstanding. Rejection/failure/
+// cancellation reverses the hold via a new `WITHDRAWAL_REVERSAL` credit,
+// never by editing the original entries. Step 9: `reviewedById`/
+// `rejectionReason` are now populated by the AUTOMATIC pipeline too (no
+// human reviewer) — `reviewedById: null` on an automatic decision; a
+// non-null `reviewedById` means an admin used the exception-override path
+// in `routes/v1/adminEconomy.ts` (fraud-hold dispute, stuck PROCESSING row).
+model Withdrawal {
+  id String @id @default(uuid())
+
+  creatorId        String
+  creator          User                  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  earningsWalletId String
+  earningsWallet   CreatorEarningsWallet @relation(fields: [earningsWalletId], references: [id], onDelete: Restrict)
+
+  amountMinorUnits     Int
+  currency             String
+  provider             PayoutProviderType
+  destinationReference String
+
+  // Step 9 — country-aware automatic routing/payout fields.
+  countryCode         String?
+  payoutMethodId      String?
+  payoutMethod        CreatorPayoutMethod? @relation(fields: [payoutMethodId], references: [id], onDelete: SetNull)
+  feeMinorUnits       Int                  @default(0)
+  netAmountMinorUnits Int?
+  fxRateSnapshot      Json?
+  providerPayoutId    String?              @unique
+  providerStatus      String?
+  // Provider-side failure (post-submission) — distinct from `rejectionReason`,
+  // which is XNAKView's own pre-submission refusal (eligibility/KYC/fraud/limits).
+  failureReason       String?
+
+  status         WithdrawalStatus @default(REQUESTED)
+  idempotencyKey String           @unique
+
+  reviewedById    String?
+  reviewedBy      User?   @relation("WithdrawalsReviewed", fields: [reviewedById], references: [id], onDelete: SetNull)
+  rejectionReason String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  processedAt DateTime?
+
+  @@index([creatorId, createdAt])
+  @@index([status])
+  @@map("withdrawals")
+}
+
+// ---------------------------------------------------------------------------
+// Step 9 — Automated global creator payouts. A creator has at most one
+// active payout method (mirrors TikTok's own single-payout-method Balance
+// UX). Real bank details live at the provider (Airwallex) once the
+// beneficiary is created; XNAKView's own DB only keeps a masked/display
+// copy — never the full account number/IBAN beyond what's needed to show
+// "•••• 4821" back to the creator.
+// ---------------------------------------------------------------------------
+
+enum PayoutMethodStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+  DISABLED
+}
+
+model CreatorPayoutMethod {
+  id String @id @default(uuid())
+
+  creatorId String @unique
+  creator   User   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  // ISO 3166-1 alpha-2 country and ISO 4217 currency this bank account is
+  // denominated in — determines which `CountryPayoutCapability` row and
+  // which dynamic bank-field schema applied at submission time.
+  country  String
+  currency String
+
+  // Which real provider owns `providerBeneficiaryId` — picked once, at
+  // submission time, from `CountryPayoutCapability.providerPriority`.
+  // Withdrawals against this payout method always use THIS provider, never
+  // re-resolved independently (a beneficiary id is only meaningful against
+  // the provider that issued it).
+  provider              PayoutProviderType
+  providerBeneficiaryId String?            @unique
+  // Display-safe only (e.g. {"bankName": "...", "last4": "4821", "accountHolderName": "..."})
+  // — never the full account number/IBAN.
+  bankDetailsMasked     Json
+
+  status          PayoutMethodStatus @default(PENDING_VERIFICATION)
+  rejectionReason String?
+  verifiedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  withdrawals Withdrawal[]
+
+  @@index([creatorId])
+  @@map("creator_payout_methods")
+}
+
+// Admin-configurable per-country payout policy (mirrors the effective-dated
+// admin-config pattern already used by `DiamondRewardRate`/
+// `MonetizationEligibilityRule`) — these are XNAKView's OWN configured
+// limits/fees, never a claim about another platform's real numbers, and
+// never a claim about what Airwallex actually supports in a given country
+// beyond what `enabled` asserts XNAKView has turned on.
+model CountryPayoutCapability {
+  id String @id @default(uuid())
+
+  countryCode String  @unique
+  currency    String
+  enabled     Boolean @default(false)
+
+  minPayoutMinorUnits     Int
+  maxPayoutMinorUnits     Int
+  feeFixedMinorUnits      Int @default(0)
+  feePercentBps           Int @default(0)
+  estimatedProcessingDays Int @default(3)
+
+  // Ordered list of `PayoutProviderType` values (as strings, e.g.
+  // ["PAYONEER", "AIRWALLEX"]) — the orchestrator tries each in order and
+  // uses the first one that reports itself actually configured (real
+  // credentials present). Empty = no provider assigned yet for this
+  // country, even if `enabled` — surfaces as "not configured", never a
+  // silent fallback to an arbitrary provider.
+  providerPriority String[] @default([])
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("country_payout_capabilities")
+}
+
+// Idempotent inbound webhook processing — one row per real provider event,
+// never processed twice, mirrors `AdRevenueEvent`'s existing
+// `@@unique([provider, providerEventId])` natural-key pattern.
+model PayoutProviderWebhookEvent {
+  id String @id @default(uuid())
+
+  provider        String
+  externalEventId String
+  eventType       String
+  payload         Json
+
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@unique([provider, externalEventId])
+  @@map("payout_provider_webhook_events")
+}
+
+enum FraudHoldStatus {
+  ACTIVE
+  RELEASED
+}
+
+// A compliance/fraud hold blocks new withdrawal requests for a user
+// without touching their earnings balance — released explicitly by an
+// admin, never automatically (Step 9's automatic withdrawal pipeline can
+// CREATE a hold via `lib/fraudRiskEngine.ts`, `createdById: null`, but
+// clearing one is still exclusively an admin action — a deliberate,
+// disclosed exception to "no manual review": it's a compliance backstop,
+// not the routine withdrawal-approval step the brief objects to).
+model FraudHold {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation("FraudHoldsAgainst", fields: [userId], references: [id], onDelete: Cascade)
+  reason String
+
+  status FraudHoldStatus @default(ACTIVE)
+
+  // Null = raised automatically by `fraudRiskEngine.ts`, not by an admin.
+  createdById String?
+  createdBy   User?    @relation("FraudHoldsCreated", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  releasedById String?
+  releasedBy   User?     @relation("FraudHoldsReleased", fields: [releasedById], references: [id], onDelete: SetNull)
+  releasedAt   DateTime?
+
+  @@index([userId, status])
+  @@map("fraud_holds")
+}
+
+// ---------------------------------------------------------------------------
+// Step 8 — Creator Monetization (ad revenue). XNAKView's own locked default
+// split (70% creator / 30% platform), never a claim about any other
+// platform's private revenue-share numbers. Ads run globally regardless of
+// a creator's monetization status; only the SHARE of confirmed revenue
+// depends on whether the creator was ACTIVE at the moment that specific
+// revenue event was recorded — never retroactive, never estimated from
+// views/impressions alone.
+// ---------------------------------------------------------------------------
+
+enum MonetizationStatus {
+  NOT_ELIGIBLE
+  ELIGIBLE
+  PENDING_REVIEW
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+// Admin-configurable eligibility thresholds — effective-dated (like
+// DiamondRewardRate), never hard-coded, never presented as another
+// platform's real requirements. `active`+date-range means a future
+// tightened policy can be scheduled ahead of time; the row in effect at
+// evaluation time is what `lib/monetizationEligibility.ts` uses.
+model MonetizationEligibilityRule {
+  id String @id @default(uuid())
+
+  minFollowers          Int      @default(0)
+  minLifetimeVideoViews Int      @default(0)
+  minAccountAgeDays     Int      @default(0)
+  requireGoodStanding   Boolean  @default(true)
+  // Empty = no region restriction. ISO country codes.
+  allowedRegions        String[] @default([])
+
+  effectiveFrom  DateTime  @default(now())
+  effectiveUntil DateTime?
+  active         Boolean   @default(true)
+
+  createdAt   DateTime @default(now())
+  createdById String
+  createdBy   User     @relation("MonetizationEligibilityRulesCreated", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([active, effectiveFrom])
+  @@map("monetization_eligibility_rules")
+}
+
+// Admin-configurable creator/platform ad-revenue split — same "most recent
+// effective row wins, never edited in place" pattern as every other rate
+// in this schema. `creatorSharePercent + platformSharePercent` must always
+// equal 100 (enforced in lib/adRevenueService.ts, not the database).
+model AdRevenueShareRule {
+  id String @id @default(uuid())
+
+  creatorSharePercent  Decimal @db.Decimal(5, 2)
+  platformSharePercent Decimal @db.Decimal(5, 2)
+
+  effectiveFrom  DateTime  @default(now())
+  effectiveUntil DateTime?
+  active         Boolean   @default(true)
+
+  createdAt   DateTime @default(now())
+  createdById String
+  createdBy   User     @relation("AdRevenueShareRulesCreated", fields: [createdById], references: [id], onDelete: Cascade)
+
+  revenueEvents AdRevenueEvent[]
+
+  @@index([active, effectiveFrom])
+  @@map("ad_revenue_share_rules")
+}
+
+// One row per creator — their current monetization status and (if ever
+// reached) the timestamp ACTIVE was first granted. `activatedAt` is
+// intentionally never cleared on a later suspend/disable, so "when did
+// this creator first become monetized" stays answerable; whether NEW
+// revenue currently earns a creator share is governed purely by the
+// CURRENT `status`, never by `activatedAt` alone (a SUSPENDED creator with
+// a past `activatedAt` earns 0% on new revenue, exactly like a creator who
+// was never activated).
+model CreatorMonetization {
+  id String @id @default(uuid())
+
+  creatorId String @unique
+  creator   User   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  status MonetizationStatus @default(NOT_ELIGIBLE)
+
+  activatedAt DateTime?
+
+  statusReason      String?
+  statusUpdatedAt   DateTime @default(now())
+  statusUpdatedById String?
+  statusUpdatedBy   User?    @relation("CreatorMonetizationStatusUpdatedBy", fields: [statusUpdatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("creator_monetizations")
+}
+
+enum AdRevenueEventType {
+  REVENUE
+  REVERSAL
+}
+
+enum AdRevenueEventStatus {
+  CONFIRMED
+  INVALID
+}
+
+// The immutable, append-only ad-revenue ledger — one row per real event
+// from the configured ad provider (never a theoretical CPM/estimated-spend
+// calculation). A correction/chargeback is a NEW row
+// (`type: REVERSAL`, `reversalOfEventId` pointing back at the original) —
+// the original REVENUE row is never edited or deleted. `provider` +
+// `providerEventId` is unique so a retried/duplicated provider webhook can
+// never be double-counted; `idempotencyKey` covers the same guarantee for
+// admin-entered corrections that don't have a natural provider event id.
+model AdRevenueEvent {
+  id String @id @default(uuid())
+
+  type AdRevenueEventType @default(REVENUE)
+
+  provider        String
+  providerEventId String
+
+  videoId   String
+  video     Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  creatorId String
+  creator   User   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  impressions      Int  @default(0)
+  validImpressions Int  @default(0)
+  clicks           Int?
+
+  // Integer minor units (e.g. cents) of `currency` — the actual confirmed
+  // amount the ad provider reported, never derived from impressions/views.
+  grossRevenueMinorUnits Int
+  currency               String @default("USD")
+
+  status AdRevenueEventStatus @default(CONFIRMED)
+
+  // Snapshot of the creator's monetization state AT THIS EVENT — this,
+  // not the creator's CURRENT status, is what the recorded split reflects,
+  // so a later status change never retroactively changes history.
+  monetizationStatusAtEvent MonetizationStatus
+  wasMonetizationActive     Boolean
+
+  revenueShareRuleId           String?
+  revenueShareRule             AdRevenueShareRule? @relation(fields: [revenueShareRuleId], references: [id], onDelete: SetNull)
+  creatorSharePercentSnapshot  Decimal?            @db.Decimal(5, 2)
+  platformSharePercentSnapshot Decimal?            @db.Decimal(5, 2)
+
+  creatorShareMinorUnits  Int @default(0)
+  platformShareMinorUnits Int @default(0)
+
+  reversalOfEventId String?
+  reversalOfEvent   AdRevenueEvent?  @relation("AdRevenueEventReversal", fields: [reversalOfEventId], references: [id], onDelete: SetNull)
+  reversals         AdRevenueEvent[] @relation("AdRevenueEventReversal")
+
+  // The referenceId used on the corresponding CreatorEarningsLedgerEntry
+  // (type AD_REVENUE / AD_REVENUE_REVERSAL) when the creator's share was
+  // actually credited/debited — null when creatorShareMinorUnits is 0 (no
+  // wallet movement happened, e.g. pre-monetization revenue).
+  earningsLedgerEntryId String?
+
+  idempotencyKey String @unique
+
+  createdAt DateTime @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([creatorId, createdAt])
+  @@index([videoId, createdAt])
+  @@index([status])
+  @@map("ad_revenue_events")
+}
+
+// A generic, append-only trail for financial admin actions (rate changes,
+// withdrawal review decisions, fraud holds, refunds) that don't already
+// have their own immutable ledger row — never a substitute for the Coin/
+// Diamond/Earnings ledgers themselves, only the "who did this and why".
+model FinancialAuditLog {
+  id String @id @default(uuid())
+
+  actorId String?
+  actor   User?   @relation("FinancialAuditLogsByActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@map("financial_audit_logs")
+}
+
+// ===========================================================================
+// Step 10 — AI-first Trust & Safety.
+//
+// One unified pipeline backs every content/event type: content/event ->
+// automated detection -> policy classification -> confidence/severity ->
+// enforcement decision -> action -> audit record -> user notification ->
+// appeal path. See lib/moderation/moderationPipeline.ts — no route should
+// ever implement its own one-off moderation logic.
+//
+// This intentionally does NOT touch or replace the existing per-content-type
+// Report tables (VideoReport, PhotoPostReport, TextPostReport, StoryReport,
+// MessageReport, ConversationReport, CallReport, LiveReport,
+// LiveViewerReport, LiveChatMessageReport, VideoCommentReport) — those stay
+// exactly as they are for historical continuity and existing migrations.
+// `SafetyReport` below is the normalized, single reporting model that NEW
+// report-creation code writes to going forward.
+// ===========================================================================
+
+enum ModerationContentType {
+  VIDEO
+  VIDEO_COMMENT
+  PHOTO_POST
+  PHOTO_POST_COMMENT
+  TEXT_POST
+  TEXT_POST_COMMENT
+  STORY
+  MESSAGE
+  LIVE_CHAT_MESSAGE
+  LIVE_SESSION
+  USER_PROFILE
+  USERNAME
+  BIO
+  AVATAR
+}
+
+// The policy categories XNAKView classifies content/behavior into — not
+// every violation is treated identically (see `ModerationDecision`).
+enum ModerationCategory {
+  SEXUAL_NUDITY
+  EXPLOITATION
+  VIOLENCE
+  GRAPHIC_CONTENT
+  THREATS
+  HATE_HARASSMENT
+  BULLYING
+  ABUSIVE_PROFANE_LANGUAGE
+  DANGEROUS_BEHAVIOR
+  SCAM_FRAUD
+  SPAM
+  IMPERSONATION
+  ILLEGAL_REGULATED
+  HARMFUL_CONTENT
+  COPYRIGHT
+  OTHER_POLICY_VIOLATION
+}
+
+enum ModerationSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  SEVERE
+}
+
+// Every outcome the pipeline can reach for a single piece of content —
+// deliberately NOT a binary allow/remove (brief §2: "do not treat every
+// violation identically").
+enum ModerationDecision {
+  ALLOW
+  LIMIT
+  NOT_RECOMMENDED
+  AGE_RESTRICT
+  REMOVE
+  FEATURE_RESTRICT
+  TEMPORARY_ACCOUNT_RESTRICT
+  PERMANENT_BAN
+}
+
+enum EnforcementActionType {
+  WARN
+  CONTENT_REMOVED
+  LIMIT_DISTRIBUTION
+  AGE_RESTRICT
+  FEATURE_RESTRICT
+  TEMPORARY_ACCOUNT_RESTRICT
+  PERMANENT_BAN
+}
+
+enum EnforcementStatus {
+  ACTIVE
+  REVERSED
+  EXPIRED
+}
+
+enum EnforcementSourceType {
+  MODERATION_EVENT
+  SAFETY_REPORT
+  RISK_ASSESSMENT
+  MANUAL
+}
+
+enum AppealStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+}
+
+enum SafetyReportTargetType {
+  USER_ACCOUNT
+  VIDEO
+  VIDEO_COMMENT
+  PHOTO_POST
+  PHOTO_POST_COMMENT
+  TEXT_POST
+  TEXT_POST_COMMENT
+  STORY
+  MESSAGE
+  CONVERSATION
+  LIVE_SESSION
+  LIVE_CHAT_MESSAGE
+  CREATOR_PAYMENT
+}
+
+enum SafetyReportReasonCategory {
+  SEXUAL_NUDITY
+  EXPLOITATION
+  VIOLENCE
+  GRAPHIC_CONTENT
+  THREATS
+  HATE_HARASSMENT
+  BULLYING
+  ABUSIVE_PROFANE_LANGUAGE
+  DANGEROUS_BEHAVIOR
+  SCAM_FRAUD
+  SPAM
+  IMPERSONATION
+  ILLEGAL_REGULATED
+  HARMFUL_CONTENT
+  COPYRIGHT
+  UNDERAGE_USER
+  OTHER
+}
+
+enum SafetyReportStatus {
+  OPEN
+  UNDER_REVIEW
+  ACTIONED
+  DISMISSED
+}
+
+enum RiskSubjectType {
+  USER
+  ACCOUNT_CREATION
+  WITHDRAWAL
+  PAYOUT_METHOD
+  GIFT_TRANSACTION
+}
+
+enum IdentityTrustStatus {
+  ACTIVE
+  REVOKED_BANNED
+}
+
+// One row per automated analysis of a piece of content/event — the audit
+// record a `ModerationDecision` and any resulting `EnforcementAction` trace
+// back to. Immutable: a re-analysis (e.g. an appeal's automated
+// re-evaluation) creates a NEW row, never edits this one.
+model ModerationEvent {
+  id String @id @default(uuid())
+
+  contentType ModerationContentType
+  contentId   String
+  authorId    String?
+  author      User?                 @relation("ModerationEventsAgainst", fields: [authorId], references: [id], onDelete: SetNull)
+
+  // 'MOCK' in tests; a real vendor name once configured. Never a fabricated
+  // result when unconfigured — the pipeline refuses instead (see
+  // moderationPipeline.ts's doc comment).
+  provider          String
+  providerRequestId String?
+
+  // ModerationCategory[] with each category's own confidence, e.g.
+  // [{ "category": "THREATS", "confidence": 0.94 }] — every category the
+  // provider flagged, not just the top one.
+  categories Json
+  severity   ModerationSeverity
+  confidence Float // 0.0-1.0, the top matched category's confidence
+  decision   ModerationDecision
+
+  createdAt DateTime @default(now())
+
+  evidence           ModerationEvidence[]
+  enforcementActions EnforcementAction[]
+
+  @@index([contentType, contentId])
+  @@index([authorId, createdAt])
+  @@index([decision])
+  @@map("moderation_events")
+}
+
+// Evidence backing a `ModerationEvent` — a reference, never unnecessary raw
+// sensitive content: a hash of the analyzed text, a storage key already
+// used for the content's own media, or a report id. See
+// lib/moderation/moderationPipeline.ts's retention comment (brief §15:
+// "minimize sensitive data").
+model ModerationEvidence {
+  id String @id @default(uuid())
+
+  moderationEventId String
+  moderationEvent   ModerationEvent @relation(fields: [moderationEventId], references: [id], onDelete: Cascade)
+
+  kind      String // "TEXT_SNIPPET_HASH" | "IMAGE_REF" | "AUDIO_REF" | "VIDEO_FRAME_REF" | "REPORT_REF"
+  reference String // a hash, a storage key, or another record's id — never the raw sensitive payload itself
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([moderationEventId])
+  @@map("moderation_evidence")
+}
+
+// The actual action taken against a user/content. `sourceType` +
+// exactly one of `moderationEventId`/`safetyReportId`/`riskAssessmentId`
+// trace back to WHY — never applied standalone. Reversal (an accepted
+// appeal, or an admin correction) sets `reversedAt`/`reversedById`/
+// `reversalReason` on THIS row rather than deleting it — the original
+// decision stays fully auditable (brief §14: "never silently overwrite
+// historical decisions").
+model EnforcementAction {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation("EnforcementActionsAgainst", fields: [userId], references: [id], onDelete: Cascade)
+
+  actionType EnforcementActionType
+  category   ModerationCategory?
+  severity   ModerationSeverity?
+
+  sourceType        EnforcementSourceType
+  moderationEventId String?
+  moderationEvent   ModerationEvent?      @relation(fields: [moderationEventId], references: [id], onDelete: SetNull)
+  safetyReportId    String?
+  safetyReport      SafetyReport?         @relation(fields: [safetyReportId], references: [id], onDelete: SetNull)
+  riskAssessmentId  String?
+  riskAssessment    RiskAssessment?       @relation(fields: [riskAssessmentId], references: [id], onDelete: SetNull)
+
+  contentType ModerationContentType?
+  contentId   String?
+
+  reason String
+
+  status EnforcementStatus @default(ACTIVE)
+
+  // Null actorId = automatic pipeline decision (the normal path — mirrors
+  // Step 9's `reviewedById: null` convention). A non-null value means an
+  // admin used the exception-override path.
+  actorId String?
+  actor   User?   @relation("EnforcementActionsCreated", fields: [actorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime? // TEMPORARY_ACCOUNT_RESTRICT only — null = indefinite/permanent
+
+  reversedAt     DateTime?
+  reversedById   String?
+  reversedBy     User?     @relation("EnforcementActionsReversed", fields: [reversedById], references: [id], onDelete: SetNull)
+  reversalReason String?
+
+  appeals Appeal[]
+
+  @@index([userId, status])
+  @@index([contentType, contentId])
+  @@index([actionType])
+  @@map("enforcement_actions")
+}
+
+// A real appeal lifecycle: submitted -> (automated re-evaluation or human
+// review) -> accepted/rejected -> the original `EnforcementAction` is
+// reversed on ACCEPTED, never edited/deleted on REJECTED. One row per
+// attempt — a second appeal after a REJECTED one is a new row, keeping full
+// history.
+model Appeal {
+  id String @id @default(uuid())
+
+  enforcementActionId String
+  enforcementAction   EnforcementAction @relation(fields: [enforcementActionId], references: [id], onDelete: Cascade)
+
+  submittedById String
+  submittedBy   User   @relation("AppealsSubmitted", fields: [submittedById], references: [id], onDelete: Cascade)
+  reason        String
+
+  status AppealStatus @default(SUBMITTED)
+
+  decidedAt     DateTime?
+  decidedById   String? // null = an automated re-evaluation decided this
+  decidedBy     User?     @relation("AppealsDecided", fields: [decidedById], references: [id], onDelete: SetNull)
+  decisionNotes String?
+
+  createdAt DateTime @default(now())
+
+  @@index([enforcementActionId])
+  @@index([submittedById, createdAt])
+  @@index([status])
+  @@map("appeals")
+}
+
+// Normalized reporting across every reportable target — the single new
+// reporting model going forward (see the block comment above).
+model SafetyReport {
+  id String @id @default(uuid())
+
+  reporterId String
+  reporter   User   @relation("SafetyReportsMade", fields: [reporterId], references: [id], onDelete: Cascade)
+
+  targetType   SafetyReportTargetType
+  targetId     String
+  // The account being reported against/responsible for the content, when known.
+  targetUserId String?
+  targetUser   User?                  @relation("SafetyReportsAgainst", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  reasonCategory SafetyReportReasonCategory
+  details        String?
+
+  status SafetyReportStatus @default(OPEN)
+
+  resultingEnforcementActions EnforcementAction[]
+
+  reviewedById String?
+  reviewedBy   User?     @relation("SafetyReportsReviewed", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([targetType, targetId])
+  @@index([targetUserId])
+  @@index([status, createdAt])
+  @@map("safety_reports")
+}
+
+// Persisted risk assessment — extends (never duplicates) Step 9's
+// `fraudRiskEngine.ts`: every risk check on any subject (account creation, a
+// Gift send, a withdrawal, a payout method) writes one row here whether or
+// not it blocked anything, so risk posture over time is queryable/
+// auditable, not just a pass/fail return value.
+model RiskAssessment {
+  id String @id @default(uuid())
+
+  subjectType RiskSubjectType
+  subjectId   String
+  userId      String?
+  user        User?           @relation("RiskAssessmentsAgainst", fields: [userId], references: [id], onDelete: SetNull)
+
+  riskScore         Int // 0-100
+  reasonCodes       String[]
+  evidenceRefs      Json?
+  // Free text (e.g. "ALLOW"/"BLOCK"/"HOLD_FOR_REVIEW"), not a rigid enum —
+  // new signals/actions are expected to be added often as fraud patterns evolve.
+  recommendedAction String
+
+  blocked Boolean @default(false)
+
+  enforcementActions EnforcementAction[]
+
+  createdAt DateTime @default(now())
+
+  @@index([subjectType, subjectId])
+  @@index([userId, createdAt])
+  @@map("risk_assessments")
+}
+
+// "One verified identity = one account" (locked XNAKView rule) — never the
+// raw document/national-ID number. `identityFingerprintHash` is a one-way
+// HMAC of the KYC provider's own reference id (see
+// lib/moderation/identityTrust.ts), so two verification attempts that
+// resolve to the SAME real-world identity at the provider produce the SAME
+// hash without XNAKView ever holding the underlying document data itself.
+// `@unique` on the hash IS the duplicate-identity block.
+model IdentityTrustSignal {
+  id String @id @default(uuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  identityFingerprintHash String @unique
+  verificationProvider    String
+
+  status IdentityTrustStatus @default(ACTIVE)
+
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@index([status])
+  @@map("identity_trust_signals")
+}
+
+// ===========================================================================
+// Step 11 — Levels, Teams & Gamification.
+//
+// XNAKView's own configurable gamification layer, NOT a port of any private
+// TikTok formula (TikTok publishes no general account-XP/level system, no
+// in-app team/guild feature, and no exact Fan Club/streak scoring formula —
+// see the Step 11 completion report). XP/levels/badges/points/rankings are
+// NEVER automatically cash: every monetary reward still flows through the
+// existing Coins/Diamonds/CreatorEarnings ledgers (CoinLedgerEntry,
+// CreatorDiamondLedgerEntry, CreatorEarningsLedgerEntry) untouched by this
+// block — this block only ever READS those ledgers/events to compute XP, it
+// never writes to them and never mints a ledger entry of its own.
+//
+// XPEvent is the one append-only, idempotent ledger every XP change goes
+// through (mirrors CoinLedgerEntry/CreatorDiamondLedgerEntry's own posture:
+// immutable rows, `balanceAfter` snapshot, unique idempotency key) — no route
+// or job ever writes `UserLevel.lifetimeXP`/`CreatorLevel.lifetimeXP`/
+// `FanClubMembership.lifetimeFanXP` directly. `excludedAsFraud` lets Trust &
+// Safety exclude a specific event's XP from level/leaderboard math without
+// deleting the historical record (brief's "freeze affected XP/rank", never
+// silently rewritten).
+// ===========================================================================
+
+enum XPLedger {
+  USER
+  CREATOR
+  FAN
+}
+
+// What actually earned the XP — always tied to a real, already-committed
+// platform event (never a bare client-asserted "give me XP" call).
+enum XPSourceType {
+  FOLLOW_CREATED
+  CONTENT_PUBLISHED
+  LIVE_HOSTED_SESSION
+  LIVE_WATCH_SESSION
+  GIFT_SENT
+  GIFT_RECEIVED
+  FAN_CLUB_JOIN
+  FAN_CLUB_ENGAGEMENT
+  ACHIEVEMENT_UNLOCKED
+  STREAK_MILESTONE
+  TEAM_ACTIVITY
+  ADMIN_ADJUSTMENT
+}
+
+model XPEvent {
+  id String @id @default(uuid())
+
+  ledger XPLedger
+  userId String
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // "" for USER/CREATOR ledger events; the FanClub id for FAN ledger events.
+  // Never nullable — Postgres treats NULL as distinct-from-NULL in a unique
+  // index, which would silently break the idempotency guarantee below.
+  scopeId String @default("")
+
+  sourceType  XPSourceType
+  // Idempotency key material (e.g. a Follow's `(followerId,followingId)`
+  // pair, a GiftTransaction id, a LiveSession id, an Achievement id). "" only
+  // for sources that are legitimately repeatable with no natural key of
+  // their own (ADMIN_ADJUSTMENT passes a fresh uuid here instead).
+  sourceRefId String       @default("")
+
+  amount       Int
+  balanceAfter Int
+
+  excludedAsFraud Boolean @default(false)
+  exclusionReason String?
+
+  metadata Json?
+
+  createdAt   DateTime @default(now())
+  createdById String? // set only for ADMIN_ADJUSTMENT
+
+  @@unique([ledger, userId, scopeId, sourceType, sourceRefId])
+  @@index([userId, ledger, createdAt])
+  @@map("xp_events")
+}
+
+// A queryable log of level-ups, separate from re-deriving them from
+// XPEvent+config every time — also what drives the "you leveled up!"
+// gamification notification without recomputing anything.
+model LevelUpEvent {
+  id String @id @default(uuid())
+
+  ledger      XPLedger
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scopeId     String   @default("")
+  fromLevel   Int
+  toLevel     Int
+  xpAtLevelUp Int
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, ledger, createdAt])
+  @@map("level_up_events")
+}
+
+// Server-authoritative snapshot — always re-derivable from XPEvent's
+// lifetime sum + the current USER_LEVEL_THRESHOLDS GamificationConfig, kept
+// as a materialized row purely so every read isn't a SUM() over the ledger.
+model UserLevel {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  currentLevel Int @default(1)
+  currentXP    Int @default(0) // XP earned within the current level
+  lifetimeXP   Int @default(0)
+  nextLevelXP  Int @default(100) // XP needed to complete the current level (0 once at the configured max level)
+
+  updatedAt DateTime @updatedAt
+
+  @@map("user_levels")
+}
+
+model CreatorLevel {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  currentLevel Int @default(1)
+  currentXP    Int @default(0)
+  lifetimeXP   Int @default(0)
+  nextLevelXP  Int @default(100)
+
+  updatedAt DateTime @updatedAt
+
+  @@map("creator_levels")
+}
+
+// ---------------------------------------------------------------------------
+// LIVE Fan Club — XNAKView's own configurable equivalent of TikTok LIVE's
+// Fan Club (join, fan XP/level, badge, streaks). TikTok's own point/level
+// formula is undisclosed; XNAKView defines its own via GamificationConfig's
+// FAN_LEVEL_THRESHOLDS/XP_AWARD_RULES keys, never presented as TikTok's.
+// ---------------------------------------------------------------------------
+
+enum FanClubStatus {
+  ACTIVE
+  DISABLED
+}
+
+model FanClub {
+  id String @id @default(uuid())
+
+  creatorId String @unique
+  creator   User   @relation("FanClubOwner", fields: [creatorId], references: [id], onDelete: Cascade)
+
+  name       String
+  badgeEmoji String        @default("🎗️")
+  status     FanClubStatus @default(ACTIVE)
+
+  // Eligibility/config the creator can set for their own club — never a
+  // platform-wide mandate.
+  minAccountAgeDays Int @default(0)
+
+  memberCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships FanClubMembership[]
+
+  @@map("fan_clubs")
+}
+
+enum FanClubMembershipStatus {
+  ACTIVE
+  LEFT
+  REMOVED
+}
+
+model FanClubMembership {
+  id String @id @default(uuid())
+
+  fanClubId String
+  fanClub   FanClub @relation(fields: [fanClubId], references: [id], onDelete: Cascade)
+  fanId     String
+  fan       User    @relation(fields: [fanId], references: [id], onDelete: Cascade)
+
+  status FanClubMembershipStatus @default(ACTIVE)
+
+  fanLevel      Int @default(1)
+  fanXP         Int @default(0)
+  lifetimeFanXP Int @default(0)
+  nextLevelXP   Int @default(50)
+
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+
+  @@unique([fanClubId, fanId])
+  @@index([fanId])
+  @@index([fanClubId, lifetimeFanXP])
+  @@map("fan_club_memberships")
+}
+
+// ---------------------------------------------------------------------------
+// Streaks — an XNAKView-original mechanic (TikTok has only tested a limited,
+// chat-only DM streak; it has no LIVE-attendance/Fan-Club/creator-activity
+// streak). Server time (`lastActivityDate`, UTC midnight) is authoritative;
+// nothing here trusts a client-reported "I was active today".
+// ---------------------------------------------------------------------------
+
+enum StreakType {
+  LIVE_ATTENDANCE
+  FAN_CLUB_ENGAGEMENT
+  CREATOR_ACTIVITY
+}
+
+model Streak {
+  id String @id @default(uuid())
+
+  userId  String
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type    StreakType
+  // "" for CREATOR_ACTIVITY (global per-user); the target creator's id for
+  // LIVE_ATTENDANCE; the FanClub id for FAN_CLUB_ENGAGEMENT.
+  scopeId String     @default("")
+
+  currentCount     Int       @default(0)
+  longestCount     Int       @default(0)
+  lastActivityDate DateTime? // stored at UTC midnight
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, type, scopeId])
+  @@map("streaks")
+}
+
+// ---------------------------------------------------------------------------
+// Teams — an XNAKView-original creator/host team feature (TikTok itself has
+// no in-app team/guild system; LIVE "agencies" are an off-platform business
+// relationship, not an in-app feature — see the Step 11 completion report).
+// Deliberately NOT MLM-shaped: recruiting a member awards no XP/Coins/
+// Diamonds by itself (see lib/gamification/teams.ts) — only real platform
+// activity (LIVE hours, gifts actually received, engagement) ever moves a
+// TeamTarget or a leaderboard score.
+// ---------------------------------------------------------------------------
+
+enum TeamStatus {
+  ACTIVE
+  DISBANDED
+}
+
+enum TeamRole {
+  OWNER
+  MANAGER
+  MEMBER
+}
+
+enum TeamMemberStatus {
+  ACTIVE
+  LEFT
+  REMOVED
+}
+
+model Team {
+  id String @id @default(uuid())
+
+  name        String
+  description String?
+  avatarKey   String?
+  status      TeamStatus @default(ACTIVE)
+
+  ownerId String
+  owner   User   @relation("TeamOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  memberCount Int @default(1)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  disbandedAt DateTime?
+
+  members  TeamMember[]
+  invites  TeamInvite[]
+  targets  TeamTarget[]
+  activity TeamActivityEntry[]
+
+  @@index([status])
+  @@map("teams")
+}
+
+model TeamMember {
+  id String @id @default(uuid())
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role   TeamRole         @default(MEMBER)
+  status TeamMemberStatus @default(ACTIVE)
+
+  // Plain id, not a relation — same "who did this" convention as
+  // `User.statusUpdatedById` elsewhere in this schema.
+  invitedById String?
+
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+
+  @@unique([teamId, userId])
+  @@index([userId, status])
+  @@map("team_members")
+}
+
+enum TeamInviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+model TeamInvite {
+  id String @id @default(uuid())
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  inviteeId   String
+  invitee     User   @relation("TeamInviteInvitee", fields: [inviteeId], references: [id], onDelete: Cascade)
+  invitedById String
+  invitedBy   User   @relation("TeamInviteInviter", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  status TeamInviteStatus @default(PENDING)
+
+  createdAt   DateTime  @default(now())
+  respondedAt DateTime?
+
+  @@index([inviteeId, status])
+  @@index([teamId, status])
+  @@map("team_invites")
+}
+
+enum TeamTargetMetric {
+  LIVE_HOURS
+  LIVE_SESSIONS
+  GIFTS_RECEIVED_COINS
+  TEAM_ENGAGEMENT_POINTS
+}
+
+enum TeamTargetStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+  CANCELLED
+}
+
+model TeamTarget {
+  id String @id @default(uuid())
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  metric       TeamTargetMetric
+  targetValue  Int
+  currentValue Int              @default(0)
+  periodStart  DateTime
+  periodEnd    DateTime
+  status       TeamTargetStatus @default(ACTIVE)
+
+  createdById String
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([teamId, status])
+  @@map("team_targets")
+}
+
+enum TeamActivityType {
+  LIVE_HOURS_LOGGED
+  GIFT_RECEIVED
+  MEMBER_JOINED
+  MEMBER_LEFT
+  MEMBER_REMOVED
+  TARGET_CREATED
+  TARGET_COMPLETED
+}
+
+// Append-only contribution/event log — what a Team's activity feed reads,
+// and what target/leaderboard aggregation sums over (never a full scan of
+// unrelated tables). `value` is metric-shaped per `type` (minutes for
+// LIVE_HOURS_LOGGED, coins for GIFT_RECEIVED, 0 for membership/target events).
+model TeamActivityEntry {
+  id String @id @default(uuid())
+
+  teamId String
+  team   Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  type            TeamActivityType
+  value           Int              @default(0)
+  excludedAsFraud Boolean          @default(false)
+  metadata        Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([teamId, createdAt])
+  @@index([teamId, type, createdAt])
+  @@map("team_activity_entries")
+}
+
+// ---------------------------------------------------------------------------
+// Badges & Achievements — server-authoritative, admin-configured catalogs
+// (same "mutable catalog row" posture as `Gift`/`CoinPackage`, never
+// hard-coded in the mobile client). `criteriaKey` maps to one evaluator
+// function registered in lib/gamification/badgeRules.ts /
+// achievementRules.ts — adding a new badge/achievement from the catalog
+// without a matching registered evaluator is inert (never silently
+// auto-awarded), by design.
+// ---------------------------------------------------------------------------
+
+enum BadgeCategory {
+  MILESTONE
+  LIVE
+  TEAM
+  CONSISTENCY
+  CREATOR
+  FAN
+}
+
+model Badge {
+  id String @id @default(uuid())
+
+  slug           String        @unique
+  name           String
+  description    String
+  iconKey        String?
+  category       BadgeCategory
+  criteriaKey    String
+  criteriaParams Json?
+  active         Boolean       @default(true)
+  sortOrder      Int           @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userBadges UserBadge[]
+
+  @@map("badges")
+}
+
+model UserBadge {
+  id String @id @default(uuid())
+
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badgeId String
+  badge   Badge  @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  sourceEventRefId String?
+
+  earnedAt DateTime @default(now())
+
+  @@unique([userId, badgeId])
+  @@index([userId])
+  @@map("user_badges")
+}
+
+enum AchievementCategory {
+  CONTENT
+  SOCIAL
+  LIVE
+  GIFTING
+  TEAM
+}
+
+model Achievement {
+  id String @id @default(uuid())
+
+  slug           String              @unique
+  name           String
+  description    String
+  category       AchievementCategory
+  criteriaKey    String
+  criteriaParams Json?
+  xpReward       Int                 @default(0)
+  active         Boolean             @default(true)
+  sortOrder      Int                 @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userAchievements UserAchievement[]
+
+  @@map("achievements")
+}
+
+model UserAchievement {
+  id String @id @default(uuid())
+
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  progressValue    Int       @default(0)
+  unlockedAt       DateTime?
+  sourceEventRefId String?
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@map("user_achievements")
+}
+
+// ---------------------------------------------------------------------------
+// Leaderboards — precomputed snapshots (never a live full-table scan on
+// read). A background/admin-triggered job calls
+// lib/gamification/leaderboards.ts's `computeLeaderboard`, which excludes
+// any subject currently fraud-held (see that module's doc comment) before
+// ranking and writing this snapshot+entries pair.
+// ---------------------------------------------------------------------------
+
+enum LeaderboardType {
+  CREATOR_DIAMONDS
+  LIVE_HOURS
+  GIFT_SENDERS
+  FAN_CLUB_XP
+  TEAM_PERFORMANCE
+}
+
+enum LeaderboardPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+  ALL_TIME
+}
+
+model LeaderboardSnapshot {
+  id String @id @default(uuid())
+
+  type      LeaderboardType
+  period    LeaderboardPeriod
+  // e.g. "2026-09-08" (DAILY), "2026-W36" (WEEKLY), "2026-09" (MONTHLY), "ALL" (ALL_TIME).
+  periodKey String
+  // FanClub id for FAN_CLUB_XP; "" otherwise.
+  scopeId   String            @default("")
+
+  computedAt DateTime @default(now())
+
+  entries LeaderboardEntry[]
+
+  @@unique([type, period, periodKey, scopeId])
+  @@map("leaderboard_snapshots")
+}
+
+model LeaderboardEntry {
+  id String @id @default(uuid())
+
+  snapshotId String
+  snapshot   LeaderboardSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  // A userId or a teamId depending on the snapshot's type — deliberately not
+  // a relation (it can point at either model; the API layer resolves
+  // display info from the right table based on `snapshot.type`).
+  subjectId String
+  rank      Int
+  score     BigInt
+
+  @@unique([snapshotId, subjectId])
+  @@index([snapshotId, rank])
+  @@map("leaderboard_entries")
+}
+
+// ---------------------------------------------------------------------------
+// Admin configuration — same "never edited in place, only superseded" policy
+// as DiamondEarnRate/DiamondRewardRate above: the most recent row for a key
+// IS the current config; every prior row is automatically the version
+// history. Historical XP is never retroactively recalculated when a config
+// row changes (brief's explicit rule) — a new row only affects XP/levels
+// computed from that point forward.
+// ---------------------------------------------------------------------------
+
+enum GamificationConfigKey {
+  USER_LEVEL_THRESHOLDS
+  CREATOR_LEVEL_THRESHOLDS
+  FAN_LEVEL_THRESHOLDS
+  XP_AWARD_RULES
+  STREAK_RULES
+  LEADERBOARD_SETTINGS
+  ANTI_ABUSE_SETTINGS
+}
+
+model GamificationConfig {
+  id String @id @default(uuid())
+
+  key   GamificationConfigKey
+  value Json
+
+  createdAt   DateTime @default(now())
+  createdById String
+  createdBy   User     @relation("GamificationConfigCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([key, createdAt])
+  @@map("gamification_configs")
+}
+
+// Generic privileged-action audit trail for this block — same shape as
+// `FinancialAuditLog` above, kept separate because it's a different domain
+// (team management + gamification config), not because the concept differs.
+model GamificationAuditLog {
+  id String @id @default(uuid())
+
+  actorId String?
+  actor   User?   @relation("GamificationAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@map("gamification_audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Gamification notifications — deliberately separate from
+// `ActivityNotification` (which requires a distinct human `actorId` and is
+// scoped to social activity) since these are system-generated ("you leveled
+// up", "badge earned") with no actor. Mirrors `recordActivity`'s own
+// durable-row + best-effort-realtime-push posture.
+// ---------------------------------------------------------------------------
+
+enum GamificationNotificationType {
+  USER_LEVEL_UP
+  CREATOR_LEVEL_UP
+  FAN_LEVEL_UP
+  BADGE_AWARDED
+  ACHIEVEMENT_UNLOCKED
+  STREAK_MILESTONE
+  TEAM_INVITE_RECEIVED
+  TEAM_TARGET_COMPLETED
+  TEAM_ROLE_CHANGED
+  FAN_CLUB_JOINED
+}
+
+model GamificationNotification {
+  id String @id @default(uuid())
+
+  userId  String
+  user    User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type    GamificationNotificationType
+  payload Json?
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("gamification_notifications")
 }

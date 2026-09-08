@@ -5,9 +5,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import '../../../core/errors/app_exception.dart';
+import '../../coins/presentation/live_gift_overlay.dart';
+import '../../gamification/presentation/fan_club_sheet.dart';
 import '../domain/live_session_model.dart';
+import 'live_battle_bar.dart';
 import 'live_chat_panel.dart';
+import 'live_goal_bar.dart';
 import 'live_providers.dart';
+import 'live_reactions_overlay.dart';
+import 'live_share_sheet.dart';
 
 /// A viewer's view of someone else's LIVE room: subscribes to the host's
 /// video/audio tracks published to the self-hosted LiveKit server, shows
@@ -24,6 +30,8 @@ class LiveViewerScreen extends ConsumerStatefulWidget {
 
 class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
   final Room _room = Room();
+  final _giftOverlayKey = GlobalKey<LiveGiftOverlayState>();
+  final _reactionsKey = GlobalKey<LiveReactionsOverlayState>();
   EventsListener<RoomEvent>? _listener;
   Timer? _viewerCountTimer;
 
@@ -213,6 +221,23 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
                     ],
                   ),
                   const Spacer(),
+                  if (_liveSession != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: LiveGiftButton(overlayKey: _giftOverlayKey),
+                    ),
+                  if (_liveSession != null)
+                    IconButton(
+                      icon: const Icon(Icons.loyalty_outlined, color: Colors.white),
+                      tooltip: 'Fan Club',
+                      onPressed: () => showFanClubSheet(context, ref, creatorId: _liveSession!.hostId),
+                    ),
+                  if (_liveSession != null)
+                    IconButton(
+                      icon: const Icon(Icons.ios_share, color: Colors.white),
+                      tooltip: 'Share',
+                      onPressed: () => showLiveShareSheet(context, liveSessionId: widget.liveSessionId, title: _liveSession!.title),
+                    ),
                   IconButton(
                     icon: const Icon(Icons.flag_outlined, color: Colors.white),
                     onPressed: _report,
@@ -236,6 +261,36 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
+            if (_liveSession != null)
+              Positioned.fill(
+                child: LiveGiftOverlay(
+                  key: _giftOverlayKey,
+                  liveSessionId: widget.liveSessionId,
+                  hostId: _liveSession!.hostId,
+                  hostLabel: _liveSession!.host?.displayLabel,
+                ),
+              ),
+            if (_liveSession != null)
+              Positioned(
+                top: 52,
+                left: 0,
+                right: 0,
+                child: LiveBattleBar(liveSessionId: widget.liveSessionId, isHost: false),
+              ),
+            if (_liveSession != null && _liveSession!.goalEnabled && _liveSession!.goalTargetCoins != null)
+              Positioned(
+                top: 96,
+                left: 12,
+                right: 12,
+                child: LiveGoalBar(
+                  liveSessionId: widget.liveSessionId,
+                  goalTitle: _liveSession!.goalTitle,
+                  targetCoins: _liveSession!.goalTargetCoins!,
+                  initialProgressCoins: _liveSession!.goalProgressCoins,
+                ),
+              ),
+            Positioned.fill(child: LiveReactionsOverlay(key: _reactionsKey, liveSessionId: widget.liveSessionId)),
+            Positioned(right: 12, bottom: 200, child: LiveReactionButton(overlayKey: _reactionsKey)),
             Positioned(
               left: 0,
               right: 0,

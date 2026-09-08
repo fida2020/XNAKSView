@@ -17,7 +17,7 @@ describe('POST /api/v1/auth/register', () => {
 
     const stored = await prisma.user.findUniqueOrThrow({ where: { email: body.email } });
     expect(stored.passwordHash).not.toBe(STRONG_PASSWORD);
-    expect(stored.passwordHash.length).toBeGreaterThan(20);
+    expect(stored.passwordHash?.length ?? 0).toBeGreaterThan(20);
   });
 
   it('registers a new user with phone + password', async () => {
@@ -105,6 +105,20 @@ describe('POST /api/v1/auth/login', () => {
     const response = await request(app).post('/api/v1/auth/login').send({ phone, password: STRONG_PASSWORD });
 
     expect(response.status).toBe(200);
+  });
+
+  it('logs in with correct username + password', async () => {
+    const { response: registerResponse, body } = await registerUser();
+    const username = `u${Date.now()}`;
+    await request(app)
+      .put('/api/v1/profile')
+      .set('Authorization', `Bearer ${registerResponse.body.accessToken}`)
+      .send({ username });
+
+    const response = await request(app).post('/api/v1/auth/login').send({ username, password: body.password });
+
+    expect(response.status).toBe(200);
+    expect(response.body.user.email).toBe(body.email);
   });
 
   it('rejects invalid credentials with a generic message', async () => {

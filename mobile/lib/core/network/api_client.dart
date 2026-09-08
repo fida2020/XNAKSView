@@ -109,7 +109,14 @@ class DioApiClient implements ApiClient {
       case DioExceptionType.badResponse:
         final statusCode = error.response?.statusCode;
         if (statusCode == 401) {
-          return const UnauthorizedException();
+          // The server's actual message matters here beyond a stale access
+          // token — e.g. OTP verification's "Invalid or expired
+          // verification code" is also a 401, and the UI needs that exact
+          // text, not a generic "session expired".
+          return UnauthorizedException(_extractMessage(error) ?? 'Session expired. Please sign in again.');
+        }
+        if (statusCode == 402) {
+          return InsufficientCoinsException(_extractMessage(error) ?? 'Not enough Coins to send this Gift.');
         }
         if (statusCode == 403) {
           return ForbiddenException(_extractMessage(error) ?? 'This action is not allowed.');

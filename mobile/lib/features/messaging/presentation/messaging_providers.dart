@@ -14,7 +14,7 @@ final messagingRepositoryProvider = Provider<MessagingRepository>((ref) {
 /// connected once the user is authenticated (see `RealtimeConnector`),
 /// disposed when the provider scope is torn down (e.g. logout).
 final realtimeClientProvider = Provider<RealtimeClient>((ref) {
-  final client = RealtimeClient();
+  final client = SocketIoRealtimeClient();
   ref.onDispose(client.disconnect);
   return client;
 });

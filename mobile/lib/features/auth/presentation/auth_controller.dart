@@ -4,6 +4,7 @@ import '../../../core/device/device_identity.dart';
 import '../../../core/network/api_client_provider.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../data/auth_repository.dart';
+import '../data/oauth_native.dart';
 import '../data/token_refresher.dart';
 import '../domain/auth_state.dart';
 import '../domain/user_account.dart';
@@ -13,7 +14,7 @@ import '../domain/user_account.dart';
 /// the caller to turn into UI error state — this controller only tracks
 /// "are we authenticated and does the user have a profile yet".
 class AuthController extends StateNotifier<AuthState> {
-  AuthController(this._secureStorage, this._authRepository, this._deviceIdentity, this._tokenRefresher)
+  AuthController(this._secureStorage, this._authRepository, this._deviceIdentity, this._tokenRefresher, this._oauthNative)
       : super(const AuthState()) {
     _restoreSession();
   }
@@ -22,6 +23,7 @@ class AuthController extends StateNotifier<AuthState> {
   final AuthRepository _authRepository;
   final DeviceIdentity _deviceIdentity;
   final TokenRefresher _tokenRefresher;
+  final OAuthNative _oauthNative;
 
   Future<void> _restoreSession() async {
     final token = await _secureStorage.read(StorageKeys.accessToken);
@@ -54,11 +56,26 @@ class AuthController extends StateNotifier<AuthState> {
     }
   }
 
+  /// Sends a real, server-generated OTP — never a fake/local code. Screens
+  /// call this directly (no need to route every OTP send through
+  /// [AuthController] the way session-affecting calls are) since sending a
+  /// code doesn't change auth state.
+  Future<OtpRequestResult> requestOtp({String? email, String? phone, required String purpose}) {
+    return _authRepository.requestOtp(email: email, phone: phone, purpose: purpose);
+  }
+
+  /// Verifies a REGISTER OTP, returning the `verificationToken` the
+  /// birthday/credentials steps carry forward to [register].
+  Future<String> verifyRegistrationOtp({String? email, String? phone, required String code}) {
+    return _authRepository.verifyRegistrationOtp(email: email, phone: phone, code: code);
+  }
+
   Future<void> register({
     String? email,
     String? phone,
     required String password,
     required DateTime dateOfBirth,
+    required String verificationToken,
   }) async {
     final deviceId = await _deviceIdentity.getOrCreate();
     final platform = currentDevicePlatform();
@@ -68,6 +85,7 @@ class AuthController extends StateNotifier<AuthState> {
       phone: phone,
       password: password,
       dateOfBirth: dateOfBirth,
+      verificationToken: verificationToken,
       deviceId: deviceId,
       platform: platform,
     );
@@ -76,13 +94,32 @@ class AuthController extends StateNotifier<AuthState> {
     state = AuthState(status: AuthStatus.authenticated, userId: session.user.id, hasProfile: false);
   }
 
-  Future<void> login({String? email, String? phone, required String password}) async {
+  /// The passwordless "log in with code" alternative (brief §6) — OTP
+  /// verification alone completes the login, same as password login.
+  Future<void> loginWithOtp({String? email, String? phone, required String code}) async {
+    final deviceId = await _deviceIdentity.getOrCreate();
+    final platform = currentDevicePlatform();
+
+    final session = await _authRepository.verifyLoginOtp(
+      email: email,
+      phone: phone,
+      code: code,
+      deviceId: deviceId,
+      platform: platform,
+    );
+
+    await _persistSession(session);
+    await _resolveSessionFromBackend();
+  }
+
+  Future<void> login({String? email, String? phone, String? username, required String password}) async {
     final deviceId = await _deviceIdentity.getOrCreate();
     final platform = currentDevicePlatform();
 
     final session = await _authRepository.login(
       email: email,
       phone: phone,
+      username: username,
       password: password,
       deviceId: deviceId,
       platform: platform,
@@ -90,6 +127,60 @@ class AuthController extends StateNotifier<AuthState> {
 
     await _persistSession(session);
     await _resolveSessionFromBackend();
+  }
+
+  /// Drives the real native Google Sign-In SDK, then authenticates the
+  /// resulting ID token with the backend. Returns `null` if the user
+  /// cancelled the native sign-in sheet. A [OAuthLoginResult] updates auth
+  /// state immediately (session persisted here); the other two outcomes are
+  /// handed back to the caller screen to navigate to linking/signup-completion.
+  Future<OAuthAuthResult?> continueWithGoogle() => _continueWithOAuth('GOOGLE', _oauthNative.signInWithGoogle);
+
+  /// Same as [continueWithGoogle] but via the real native Facebook Login SDK.
+  Future<OAuthAuthResult?> continueWithFacebook() => _continueWithOAuth('FACEBOOK', _oauthNative.signInWithFacebook);
+
+  Future<OAuthAuthResult?> _continueWithOAuth(String provider, Future<String?> Function() getToken) async {
+    final token = await getToken();
+    if (token == null) return null; // user cancelled the native sheet
+
+    final deviceId = await _deviceIdentity.getOrCreate();
+    final platform = currentDevicePlatform();
+    final result = await _authRepository.authenticateOAuth(provider: provider, token: token, deviceId: deviceId, platform: platform);
+
+    if (result is OAuthLoginResult) {
+      await _persistSession(result.session);
+      await _resolveSessionFromBackend();
+    }
+    return result;
+  }
+
+  /// Completes account linking (brief §5) — the existing account's password
+  /// re-authenticates before the provider identity is attached.
+  Future<void> linkOAuthAccount({required String linkingToken, required String password}) async {
+    final deviceId = await _deviceIdentity.getOrCreate();
+    final platform = currentDevicePlatform();
+    final session = await _authRepository.linkOAuthAccount(linkingToken: linkingToken, password: password, deviceId: deviceId, platform: platform);
+    await _persistSession(session);
+    await _resolveSessionFromBackend();
+  }
+
+  /// Completes a NEW social signup — the backend creates the account AND
+  /// the Profile (username/displayName/avatar) together, so this directly
+  /// reaches `hasProfile: true`, unlike phone/email registration's separate
+  /// Profile Setup step.
+  Future<void> completeOAuthSignup({required String socialSignupToken, required DateTime dateOfBirth, required String username, String? displayName}) async {
+    final deviceId = await _deviceIdentity.getOrCreate();
+    final platform = currentDevicePlatform();
+    final session = await _authRepository.completeOAuthSignup(
+      socialSignupToken: socialSignupToken,
+      dateOfBirth: dateOfBirth,
+      username: username,
+      displayName: displayName,
+      deviceId: deviceId,
+      platform: platform,
+    );
+    await _persistSession(session);
+    state = AuthState(status: AuthStatus.authenticated, userId: session.user.id, hasProfile: true);
   }
 
   Future<void> completeProfileSetup() async {
@@ -130,11 +221,16 @@ final tokenRefresherProvider = Provider<TokenRefresher>((ref) {
   return TokenRefresher(ref.watch(secureStorageProvider));
 });
 
+final oauthNativeProvider = Provider<OAuthNative>((ref) {
+  return RealOAuthNative();
+});
+
 final authControllerProvider = StateNotifierProvider<AuthController, AuthState>((ref) {
   return AuthController(
     ref.watch(secureStorageProvider),
     ref.watch(authRepositoryProvider),
     ref.watch(deviceIdentityProvider),
     ref.watch(tokenRefresherProvider),
+    ref.watch(oauthNativeProvider),
   );
 });

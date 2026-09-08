@@ -139,6 +139,12 @@ async function canJoinConversation(userId: string, conversationId: string): Prom
   return conversation.participantOneId === userId || conversation.participantTwoId === userId;
 }
 
+/** Any authenticated user may join a currently-LIVE session's room to receive real-time Gift events — same "anyone can view" posture as LIVE itself. */
+async function canJoinLiveSession(liveSessionId: string): Promise<boolean> {
+  const session = await prisma.liveSession.findUnique({ where: { id: liveSessionId }, select: { status: true } });
+  return session?.status === 'LIVE';
+}
+
 export function initRealtime(httpServer: HttpServer): SocketIOServer {
   io = new SocketIOServer(httpServer, {
     cors: { origin: corsOrigins, credentials: true },
@@ -213,6 +219,18 @@ export function initRealtime(httpServer: HttpServer): SocketIOServer {
       });
     });
 
+    socket.on('live:join', (liveSessionId: unknown) => {
+      if (typeof liveSessionId !== 'string') return;
+      void canJoinLiveSession(liveSessionId).then((allowed) => {
+        if (allowed) void socket.join(`live:${liveSessionId}`);
+      });
+    });
+
+    socket.on('live:leave', (liveSessionId: unknown) => {
+      if (typeof liveSessionId !== 'string') return;
+      void socket.leave(`live:${liveSessionId}`);
+    });
+
     socket.on('disconnect', () => {
       void handleDisconnect(userId);
     });
@@ -236,4 +254,10 @@ export function emitToUser(userId: string, event: string, payload: unknown): voi
 export function emitToConversation(conversationId: string, event: string, payload: unknown): void {
   if (!io) return;
   io.to(`conversation:${conversationId}`).emit(event, payload);
+}
+
+/** Broadcasts a real-time event (e.g. a Gift) to every socket currently in a LIVE session's room — never includes private wallet/payment data, only what brief §8 allows (sender, Gift, quantity, animation metadata). */
+export function emitToLiveSession(liveSessionId: string, event: string, payload: unknown): void {
+  if (!io) return;
+  io.to(`live:${liveSessionId}`).emit(event, payload);
 }

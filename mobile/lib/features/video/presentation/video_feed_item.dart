@@ -5,12 +5,17 @@ import 'package:video_player/video_player.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/storage/secure_storage.dart';
+import '../../../core/widgets/xnak_avatar.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../coins/domain/gift_models.dart';
+import '../../coins/presentation/coin_theme.dart';
+import '../../coins/presentation/gift_picker_sheet.dart';
 import '../domain/video_model.dart';
 import 'add_yours_response_screen.dart';
 import 'add_yours_responses_screen.dart';
 import 'comment_sheet.dart';
 import 'feed_controller.dart';
+import 'share_sheet.dart';
 import 'video_providers.dart';
 
 /// One full-screen page in the vertical feed: video playback plus the
@@ -36,15 +41,34 @@ class VideoFeedItem extends ConsumerStatefulWidget {
   ConsumerState<VideoFeedItem> createState() => _VideoFeedItemState();
 }
 
-class _VideoFeedItemState extends ConsumerState<VideoFeedItem> {
+class _VideoFeedItemState extends ConsumerState<VideoFeedItem> with SingleTickerProviderStateMixin {
   VideoPlayerController? _controller;
   bool _hasRecordedView = false;
   bool _initializing = false;
+  late final AnimationController _heartController;
+  late final Animation<double> _heartScale;
 
   @override
   void initState() {
     super.initState();
     if (widget.isActive) _initializePlayback();
+    _heartController = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _heartScale = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.2).chain(CurveTween(curve: Curves.easeOutBack)), weight: 40),
+      TweenSequenceItem(tween: Tween(begin: 1.2, end: 1.0), weight: 20),
+      TweenSequenceItem(tween: ConstantTween(1.0), weight: 20),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0).chain(CurveTween(curve: Curves.easeIn)), weight: 20),
+    ]).animate(_heartController);
+  }
+
+  /// TikTok's signature double-tap-to-like — like exactly once even if the
+  /// video is already liked (matches TikTok: double-tap never unlikes).
+  void _onDoubleTap() {
+    _heartController.forward(from: 0);
+    final video = ref.read(widget.controllerProvider).videos.firstWhere((v) => v.id == widget.video.id, orElse: () => widget.video);
+    if (!(video.likedByMe ?? false)) {
+      ref.read(widget.controllerProvider.notifier).toggleLike(video);
+    }
   }
 
   @override
@@ -110,6 +134,7 @@ class _VideoFeedItemState extends ConsumerState<VideoFeedItem> {
   @override
   void dispose() {
     _controller?.dispose();
+    _heartController.dispose();
     super.dispose();
   }
 
@@ -126,7 +151,16 @@ class _VideoFeedItemState extends ConsumerState<VideoFeedItem> {
         children: [
           GestureDetector(
             onTap: _togglePlayPause,
+            onDoubleTap: _onDoubleTap,
             child: _buildVideoSurface(video),
+          ),
+          IgnorePointer(
+            child: Center(
+              child: ScaleTransition(
+                scale: _heartScale,
+                child: const Icon(Icons.favorite, color: Colors.white, size: 120, shadows: [Shadow(blurRadius: 16, color: Colors.black45)]),
+              ),
+            ),
           ),
           Positioned(
             left: 12,
@@ -221,16 +255,40 @@ class _VideoActionRail extends ConsumerWidget {
     final following = video.isFollowedByMe ?? false;
     final favorited = video.favoritedByMe;
     final reposted = video.repostedByMe;
+    // A user can never follow themselves (enforced server-side too — see
+    // routes/v1/follow.ts) — the "+" badge must never even be offered on
+    // your own content, regardless of what `isFollowedByMe` happens to be.
+    final isOwnVideo = video.author != null && video.author!.id == ref.read(authControllerProvider).userId;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (video.author != null && !following)
-          _RailButton(
-            icon: Icons.person_add_alt_1,
-            onTap: () => controller.toggleFollow(video),
+        if (video.author != null) ...[
+          GestureDetector(
+            onTap: () => isOwnVideo ? null : context.pushCreatorProfile(video.author!.id),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                XnakAvatar(avatarUrl: video.author!.avatarUrl, radius: 22),
+                if (!following && !isOwnVideo)
+                  Positioned(
+                    bottom: -8,
+                    left: 12,
+                    child: GestureDetector(
+                      onTap: () => controller.toggleFollow(video),
+                      child: Container(
+                        padding: const EdgeInsets.all(2),
+                        decoration: const BoxDecoration(color: CoinTheme.magenta, shape: BoxShape.circle),
+                        child: const Icon(Icons.add, color: Colors.white, size: 14),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
-        const SizedBox(height: 20),
+          const SizedBox(height: 20),
+        ],
+        const SizedBox(height: 12),
         _RailButton(
           icon: liked ? Icons.favorite : Icons.favorite_border,
           color: liked ? Colors.redAccent : Colors.white,
@@ -249,6 +307,14 @@ class _VideoActionRail extends ConsumerWidget {
           color: favorited ? Colors.amberAccent : Colors.white,
           onTap: () => controller.toggleFavorite(video),
         ),
+        if (video.allowGifts && video.author != null && video.author!.id != ref.read(authControllerProvider).userId) ...[
+          const SizedBox(height: 20),
+          _RailButton(
+            icon: Icons.card_giftcard,
+            color: CoinTheme.gold,
+            onTap: () => showGiftPickerSheet(context, buildTarget: (_) => VideoGiftTarget(videoId: video.id)),
+          ),
+        ],
         const SizedBox(height: 20),
         _RailButton(
           icon: Icons.repeat,
@@ -260,13 +326,11 @@ class _VideoActionRail extends ConsumerWidget {
           icon: Icons.reply,
           label: '${video.shareCount}',
           onTap: () async {
+            await showShareSheet(context, ref, video);
             final repository = ref.read(videoRepositoryProvider);
             try {
               final shareCount = await repository.shareVideo(video.id);
               controller.applyShareCount(video.id, shareCount);
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shared')));
-              }
             } catch (_) {
               // Best-effort — sharing failing silently is preferable to
               // blocking the UI over a non-critical action.

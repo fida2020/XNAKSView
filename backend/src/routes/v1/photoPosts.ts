@@ -5,8 +5,10 @@ import path from 'path';
 import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 
+import { onContentPublished } from '@/lib/gamification/events';
 import { extractHashtags, syncPhotoPostHashtags } from '@/lib/hashtags';
 import { probeImage } from '@/lib/imageValidation';
+import { assertModerationAllowsCreation, moderateImage, moderateText } from '@/lib/moderation/moderationPipeline';
 import { streamAsset } from '@/lib/mediaStreaming';
 import { decodeCursor, encodeCursor } from '@/lib/pagination';
 import { prisma } from '@/lib/prisma';
@@ -116,6 +118,21 @@ photoPostsRouter.post(
         }),
       );
 
+      // Step 10 — caption text + per-image moderation, before the row
+      // exists. Image moderation needs a real, vendor-fetchable URL
+      // (production object storage with a public/signed URL); this local
+      // dev storage's key is passed as a placeholder reference so the
+      // audit trail is still honest ("UNCONFIGURED"/not analyzed) rather
+      // than silently skipped — see moderationPipeline.ts's doc comment.
+      if (caption) {
+        const captionModeration = await moderateText({ contentType: 'PHOTO_POST', contentId: postId, authorId: req.user!.id, text: caption });
+        assertModerationAllowsCreation(captionModeration, 'post');
+      }
+      for (const { key } of keys) {
+        const imageModeration = await moderateImage({ contentType: 'PHOTO_POST', contentId: postId, authorId: req.user!.id, imageUrl: key });
+        assertModerationAllowsCreation(imageModeration, 'post');
+      }
+
       const post = await prisma.$transaction(async (tx) => {
         const created = await tx.photoPost.create({
           data: { id: postId, userId: req.user!.id, caption, visibility, allowDownload },
@@ -126,6 +143,8 @@ photoPostsRouter.post(
         await syncPhotoPostHashtags(tx, postId, extractHashtags(caption));
         return created;
       });
+
+      if (post.visibility === 'PUBLIC') onContentPublished(post.userId, 'PHOTO_POST', post.id);
 
       const photos = await prisma.photoPostAsset.findMany({ where: { photoPostId: post.id }, orderBy: { position: 'asc' } });
       res.status(201).json(serializePhotoPost(post, { photos }));
@@ -266,8 +285,13 @@ photoPostsRouter.post(
   async (req, res, next) => {
     try {
       const post = await loadVisiblePhotoPost(req.params.id!, req.user!.id);
+
+      const commentId = randomUUID();
+      const moderation = await moderateText({ contentType: 'PHOTO_POST_COMMENT', contentId: commentId, authorId: req.user!.id, text: req.body.text });
+      assertModerationAllowsCreation(moderation, 'comment');
+
       const comment = await prisma.$transaction(async (tx) => {
-        const created = await tx.photoPostComment.create({ data: { photoPostId: post.id, userId: req.user!.id, text: req.body.text } });
+        const created = await tx.photoPostComment.create({ data: { id: commentId, photoPostId: post.id, userId: req.user!.id, text: req.body.text } });
         await tx.photoPost.update({ where: { id: post.id }, data: { commentCount: { increment: 1 } } });
         return created;
       });

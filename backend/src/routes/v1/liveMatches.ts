@@ -1,10 +1,12 @@
+import type { LiveMatch, LiveMatchTeamMember } from '@prisma/client';
 import { Router } from 'express';
 
+import { assertCanManageSide, isSessionInAnyOtherMatch, isSessionInMatch, loadTeamMemberOrThrow } from '@/lib/liveMatchTeams';
 import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/middleware/auth';
 import { createAuthRateLimiter } from '@/middleware/rateLimit';
 import { validate } from '@/middleware/validate';
-import { createLiveMatchSchema, matchScoreSchema } from '@/schemas/live.schema';
+import { createLiveMatchSchema, inviteTeamMemberSchema, matchScoreSchema } from '@/schemas/live.schema';
 import { AppError } from '@/utils/AppError';
 
 /**
@@ -38,6 +40,7 @@ function serializeMatch(match: {
   id: string;
   sessionAId: string;
   sessionBId: string;
+  matchType: string;
   status: string;
   scoreA: number;
   scoreB: number;
@@ -50,6 +53,7 @@ function serializeMatch(match: {
     id: match.id,
     sessionAId: match.sessionAId,
     sessionBId: match.sessionBId,
+    matchType: match.matchType,
     status: match.status,
     scoreA: match.scoreA,
     scoreB: match.scoreB,
@@ -58,6 +62,30 @@ function serializeMatch(match: {
     startedAt: match.startedAt,
     endedAt: match.endedAt,
   };
+}
+
+function serializeTeamMember(member: LiveMatchTeamMember) {
+  return {
+    id: member.id,
+    matchId: member.matchId,
+    liveSessionId: member.liveSessionId,
+    side: member.side,
+    status: member.status,
+    invitedById: member.invitedById,
+    respondedAt: member.respondedAt,
+    joinedAt: member.joinedAt,
+    leftAt: member.leftAt,
+  };
+}
+
+/**
+ * A match response always carries its current team lineup (empty for
+ * SOLO) — this is the only way a client can render "who's on each side"
+ * for a Team Match, since `LiveMatch` itself only stores the two captains.
+ */
+async function serializeMatchWithTeam(match: LiveMatch) {
+  const teamMembers = await prisma.liveMatchTeamMember.findMany({ where: { matchId: match.id }, orderBy: { createdAt: 'asc' } });
+  return { ...serializeMatch(match), teamMembers: teamMembers.map(serializeTeamMember) };
 }
 
 liveMatchesRouter.post(
@@ -76,7 +104,7 @@ liveMatchesRouter.post(
         throw new AppError('CONFLICT', 'Your LIVE session has ended');
       }
 
-      const { opponentSessionId, durationSeconds } = req.body;
+      const { opponentSessionId, durationSeconds, matchType } = req.body;
       if (opponentSessionId === sessionA.id) {
         throw new AppError('BAD_REQUEST', 'A LIVE session cannot battle itself');
       }
@@ -88,16 +116,20 @@ liveMatchesRouter.post(
 
       // A PENDING challenge is a proposal, not a battle — it only becomes
       // ACTIVE once the challenged host (sessionB) explicitly accepts below.
+      // For TEAM matches, sessionA/sessionB act as each side's captain —
+      // the same PENDING→ACTIVE consent flow applies to them; additional
+      // teammates are added afterward via the team/invite route below.
       const match = await prisma.liveMatch.create({
         data: {
           sessionAId: sessionA.id,
           sessionBId: sessionB.id,
           durationSeconds,
+          matchType,
           status: 'PENDING',
         },
       });
 
-      res.status(201).json(serializeMatch(match));
+      res.status(201).json(await serializeMatchWithTeam(match));
     } catch (error) {
       next(error);
     }
@@ -145,7 +177,7 @@ liveMatchesRouter.post('/live/matches/:matchId/accept', requireAuth, async (req,
       where: { id: match.id },
       data: { status: 'ACTIVE', startedAt: new Date() },
     });
-    res.status(200).json(serializeMatch(updated));
+    res.status(200).json(await serializeMatchWithTeam(updated));
   } catch (error) {
     next(error);
   }
@@ -162,7 +194,7 @@ liveMatchesRouter.post('/live/matches/:matchId/decline', requireAuth, async (req
       where: { id: match.id },
       data: { status: 'CANCELLED' },
     });
-    res.status(200).json(serializeMatch(updated));
+    res.status(200).json(await serializeMatchWithTeam(updated));
   } catch (error) {
     next(error);
   }
@@ -219,7 +251,7 @@ liveMatchesRouter.post(
         data: side === 'A' ? { scoreA: { increment } } : { scoreB: { increment } },
       });
 
-      res.status(200).json(serializeMatch(updated));
+      res.status(200).json(await serializeMatchWithTeam(updated));
     } catch (error) {
       next(error);
     }
@@ -240,7 +272,7 @@ liveMatchesRouter.post('/live/matches/:matchId/end', requireAuth, async (req, re
       where: { id: match.id },
       data: { status: 'ENDED', endedAt: new Date(), winnerSessionId },
     });
-    res.status(200).json(serializeMatch(updated));
+    res.status(200).json(await serializeMatchWithTeam(updated));
   } catch (error) {
     next(error);
   }
@@ -249,7 +281,191 @@ liveMatchesRouter.post('/live/matches/:matchId/end', requireAuth, async (req, re
 liveMatchesRouter.get('/live/matches/:matchId', requireAuth, async (req, res, next) => {
   try {
     const match = await loadMatchOrThrow(req.params.matchId!);
-    res.status(200).json(serializeMatch(match));
+    res.status(200).json(await serializeMatchWithTeam(match));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * The current PENDING or ACTIVE match a LIVE session is part of, if any —
+ * `LiveSession` itself has no back-reference to `LiveMatch` (see the
+ * model's own schema comment), so a challenged host has no other way to
+ * discover an incoming challenge, and a viewer has no other way to know
+ * "this LIVE is mid-Battle" and should render the scoreboard. Read-only,
+ * same `LiveMatch` rows every other match endpoint already uses.
+ */
+liveMatchesRouter.get('/live/:id/match', requireAuth, async (req, res, next) => {
+  try {
+    const liveSessionId = req.params.id!;
+    const match = await prisma.liveMatch.findFirst({
+      where: {
+        status: { in: ['PENDING', 'ACTIVE'] },
+        OR: [
+          { sessionAId: liveSessionId },
+          { sessionBId: liveSessionId },
+          { teamMembers: { some: { liveSessionId, status: { in: ['INVITED', 'ACTIVE'] } } } },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.status(200).json(match ? await serializeMatchWithTeam(match) : null);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// -----------------------------------------------------------------------
+// Team Match — additional teammates on either side of a TEAM match. Each
+// teammate is its own independent LIVE broadcast (own host, own viewers),
+// not a guest slot inside the captain's stream — see `LiveMatchTeamMember`'s
+// schema comment. `scoreA`/`scoreB` stay single per-side counters on
+// `LiveMatch`; a team's score is simply the sum of every Gift attributed to
+// a session on that side (`resolveActiveMatchSide` in `liveMatchTeams.ts`
+// is what makes that aggregation happen automatically).
+// -----------------------------------------------------------------------
+
+liveMatchesRouter.post(
+  '/live/matches/:matchId/team/invite',
+  requireAuth,
+  matchActionLimiter,
+  validate({ body: inviteTeamMemberSchema }),
+  async (req, res, next) => {
+    try {
+      const match = await loadMatchOrThrow(req.params.matchId!);
+      if (match.matchType !== 'TEAM') {
+        throw new AppError('BAD_REQUEST', 'Only a Team Match supports inviting additional team members');
+      }
+      if (match.status !== 'PENDING' && match.status !== 'ACTIVE') {
+        throw new AppError('CONFLICT', 'This LIVE Match is no longer accepting team members');
+      }
+
+      const { liveSessionId, side } = req.body;
+      // Anti-spoof: only someone already established on this side (its
+      // captain, or an already-ACTIVE teammate) may bring in another.
+      await assertCanManageSide(match, side, req.user!.id);
+
+      if (liveSessionId === match.sessionAId || liveSessionId === match.sessionBId) {
+        throw new AppError('BAD_REQUEST', 'This LIVE session is already a captain in this Match');
+      }
+
+      const targetSession = await prisma.liveSession.findUnique({ where: { id: liveSessionId } });
+      if (!targetSession || targetSession.status !== 'LIVE') {
+        throw new AppError('BAD_REQUEST', 'The invited LIVE session is not currently live');
+      }
+
+      if (await isSessionInMatch(match.id, liveSessionId)) {
+        throw new AppError('CONFLICT', 'This LIVE session has already been invited to this Match');
+      }
+      if (await isSessionInAnyOtherMatch(liveSessionId, match.id)) {
+        throw new AppError('CONFLICT', 'This LIVE session is already part of another Match');
+      }
+
+      const member = await prisma.liveMatchTeamMember.create({
+        data: { matchId: match.id, liveSessionId, side, invitedById: req.user!.id, status: 'INVITED' },
+      });
+
+      res.status(201).json(serializeTeamMember(member));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+liveMatchesRouter.post('/live/matches/team/:memberId/accept', requireAuth, async (req, res, next) => {
+  try {
+    const member = await loadTeamMemberOrThrow(req.params.memberId!);
+    // Only that session's own host can accept an invitation issued to it —
+    // never the inviter, never an unrelated account.
+    const session = await prisma.liveSession.findUnique({ where: { id: member.liveSessionId } });
+    if (session?.hostId !== req.user!.id) {
+      throw new AppError('FORBIDDEN', "Only the invited LIVE session's host can accept this Team Match invitation");
+    }
+    if (member.status !== 'INVITED') {
+      throw new AppError('CONFLICT', 'This Team Match invitation is no longer pending');
+    }
+    if (session.status !== 'LIVE') {
+      throw new AppError('CONFLICT', 'Your LIVE session has ended');
+    }
+    const match = await loadMatchOrThrow(member.matchId);
+    if (match.status !== 'PENDING' && match.status !== 'ACTIVE') {
+      throw new AppError('CONFLICT', 'This LIVE Match is no longer accepting team members');
+    }
+
+    const updated = await prisma.liveMatchTeamMember.update({
+      where: { id: member.id },
+      data: { status: 'ACTIVE', respondedAt: new Date(), joinedAt: new Date() },
+    });
+    res.status(200).json(serializeTeamMember(updated));
+  } catch (error) {
+    next(error);
+  }
+});
+
+liveMatchesRouter.post('/live/matches/team/:memberId/decline', requireAuth, async (req, res, next) => {
+  try {
+    const member = await loadTeamMemberOrThrow(req.params.memberId!);
+    const session = await prisma.liveSession.findUnique({ where: { id: member.liveSessionId } });
+    if (session?.hostId !== req.user!.id) {
+      throw new AppError('FORBIDDEN', "Only the invited LIVE session's host can decline this Team Match invitation");
+    }
+    if (member.status !== 'INVITED') {
+      throw new AppError('CONFLICT', 'This Team Match invitation is no longer pending');
+    }
+
+    const updated = await prisma.liveMatchTeamMember.update({
+      where: { id: member.id },
+      data: { status: 'DECLINED', respondedAt: new Date() },
+    });
+    res.status(200).json(serializeTeamMember(updated));
+  } catch (error) {
+    next(error);
+  }
+});
+
+liveMatchesRouter.post('/live/matches/team/:memberId/remove', requireAuth, async (req, res, next) => {
+  try {
+    const member = await loadTeamMemberOrThrow(req.params.memberId!);
+    const match = await loadMatchOrThrow(member.matchId);
+
+    // Only that side's CAPTAIN — never another teammate — can remove someone.
+    const captainSessionId = member.side === 'A' ? match.sessionAId : match.sessionBId;
+    const captainSession = await prisma.liveSession.findUnique({ where: { id: captainSessionId }, select: { hostId: true } });
+    if (captainSession?.hostId !== req.user!.id) {
+      throw new AppError('FORBIDDEN', "Only this side's captain can remove a team member");
+    }
+    if (member.status !== 'INVITED' && member.status !== 'ACTIVE') {
+      throw new AppError('CONFLICT', 'This team member is not currently part of the Match');
+    }
+
+    const updated = await prisma.liveMatchTeamMember.update({
+      where: { id: member.id },
+      data: { status: 'REMOVED', leftAt: new Date() },
+    });
+    res.status(200).json(serializeTeamMember(updated));
+  } catch (error) {
+    next(error);
+  }
+});
+
+liveMatchesRouter.post('/live/matches/team/:memberId/leave', requireAuth, async (req, res, next) => {
+  try {
+    const member = await loadTeamMemberOrThrow(req.params.memberId!);
+    // Only that session's own host can voluntarily leave — never their
+    // captain, never anyone else on the team.
+    const session = await prisma.liveSession.findUnique({ where: { id: member.liveSessionId } });
+    if (session?.hostId !== req.user!.id) {
+      throw new AppError('FORBIDDEN', "Only that LIVE session's host can leave the Team Match");
+    }
+    if (member.status !== 'ACTIVE') {
+      throw new AppError('CONFLICT', 'You are not currently an active member of this Team Match');
+    }
+
+    const updated = await prisma.liveMatchTeamMember.update({
+      where: { id: member.id },
+      data: { status: 'LEFT', leftAt: new Date() },
+    });
+    res.status(200).json(serializeTeamMember(updated));
   } catch (error) {
     next(error);
   }

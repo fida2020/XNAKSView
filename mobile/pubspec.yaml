@@ -67,8 +67,37 @@ dependencies:
   socket_io_client: ^2.0.3+1
 
   # Voice message recording and playback
-  record: ^5.2.1
+  record: ^7.1.1
   just_audio: ^0.9.42
+  path_provider: ^2.1.5
+
+  # Real Google Sign-In / Facebook Login (native SDKs) — the ID/access
+  # token they produce is verified server-side (backend lib/oauthProviders.ts),
+  # never trusted client-side alone. See docs/ARCHITECTURE.md for the real
+  # provider credentials that must be configured before these work on-device.
+  google_sign_in: ^6.2.2
+  flutter_facebook_auth: ^7.1.1
+
+  # Real in-app camera preview/recording for Create (Step: Create rebuild) —
+  # front/back switch, flash, zoom are genuine native camera capabilities,
+  # not a fake/simulated recorder.
+  camera: ^0.11.1
+
+  # Real Face AR — beautify/retouch, AR effects (Banuba Face AR SDK,
+  # on-device, no cloud dependency). banuba_sdk 3.1.6's own Android module
+  # pins compileSdkVersion 31 internally, which conflicts with newer
+  # transitive androidx artifacts this project's other native plugins
+  # already require — worked around with a scoped per-subproject compileSdk
+  # override in android/build.gradle.kts (same targeted-override pattern
+  # already used there for JVM target alignment), not a blind global change.
+  # The license token is never hard-coded here — see
+  # core/config/app_config.dart, read via --dart-define at build time.
+  banuba_sdk: ^3.1.6
+
+  # Native Android/iOS share sheet — the OS itself detects which compatible
+  # apps are actually installed (WhatsApp, Messenger, ...), so this never
+  # hardcodes a fixed app list.
+  share_plus: ^10.1.4
 
 dev_dependencies:
   flutter_test:
@@ -80,6 +109,18 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+  # Generates the real per-density Android/iOS launcher icon files from the
+  # existing XNAKView logo (assets/branding/xnakview_logo.png) — run via
+  # `dart run flutter_launcher_icons`. Dev-only; not part of the app's
+  # runtime dependency graph.
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/branding/xnakview_logo.png"
+  min_sdk_android: 21
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

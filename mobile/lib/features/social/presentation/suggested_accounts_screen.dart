@@ -86,7 +86,7 @@ class _SuggestedAccountsScreenState extends ConsumerState<SuggestedAccountsScree
                           onPressed: () => _toggleFollow(user),
                           child: Text(_following.contains(user.id) ? 'Following' : 'Follow'),
                         ),
-                        onTap: () => context.pushCreatorProfile(userId: user.id),
+                        onTap: () => context.pushCreatorProfile(user.id),
                       ),
                   ],
                 ),

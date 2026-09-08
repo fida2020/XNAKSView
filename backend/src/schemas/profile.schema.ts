@@ -1,14 +1,16 @@
 import { z } from 'zod';
 
 // Lowercase to keep uniqueness checks unambiguous ("Fida" and "fida" collide).
-const usernameSchema = z
+// Exported for reuse by schemas/oauth.schema.ts (completing a social
+// signup creates the Profile in the same step, same validation rules).
+export const usernameSchema = z
   .string()
   .min(3, 'Username must be at least 3 characters')
   .max(20, 'Username must be at most 20 characters')
   .regex(/^[a-zA-Z][a-zA-Z0-9_]*$/, 'Username must start with a letter and contain only letters, digits, or underscores')
   .transform((value) => value.toLowerCase());
 
-const displayNameSchema = z
+export const displayNameSchema = z
   .string()
   .trim()
   .min(1, 'Display name cannot be empty')

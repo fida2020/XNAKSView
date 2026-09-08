@@ -1,0 +1,10 @@
+# Copy this file to `banuba.properties` (same directory) and fill in the
+# real Banuba Face AR SDK client license token. `banuba.properties` itself
+# is gitignored and must NEVER be committed — see android/.gitignore.
+#
+# Read into the build via android/app/build.gradle.kts's buildConfigField,
+# exposed to native Android code as BuildConfig.BANUBA_CLIENT_TOKEN — never
+# passed through Dart/--dart-define, since it never needs to leave native
+# code (the SDK itself is initialized natively).
+
+banubaClientToken=REPLACE_ME

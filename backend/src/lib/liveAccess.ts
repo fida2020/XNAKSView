@@ -23,6 +23,11 @@ export function serializeLiveSession(liveSession: LiveSession, extras: Serialize
     subscriberOnlyChat: liveSession.subscriberOnlyChat,
     replayEnabled: liveSession.replayEnabled,
     replayStatus: liveSession.replayStatus,
+    goalEnabled: liveSession.goalEnabled,
+    goalTitle: liveSession.goalTitle,
+    goalTargetCoins: liveSession.goalTargetCoins,
+    goalProgressCoins: liveSession.goalProgressCoins,
+    isVoiceOnly: liveSession.isVoiceOnly,
     startedAt: liveSession.startedAt,
     endedAt: liveSession.endedAt,
   };

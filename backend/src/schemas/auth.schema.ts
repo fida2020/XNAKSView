@@ -40,21 +40,52 @@ export const registerSchema = z
     password: passwordSchema,
     dateOfBirth: dateOfBirthSchema,
     device: deviceSchema.optional(),
+    // Proof of OTP-verified ownership of the email/phone being registered
+    // (see lib/otpService.ts) — OTP verification happens FIRST; this token
+    // is what lets registration proceed without asking for the code again.
+    verificationToken: z.string().min(1, 'verificationToken is required'),
   })
-  .refine((data) => Boolean(data.email) || Boolean(data.phone), {
-    message: 'Either email or phone is required',
+  .refine((data) => Boolean(data.email) !== Boolean(data.phone), {
+    message: 'Provide exactly one of email or phone',
     path: ['email'],
   });
+
+export const otpRequestSchema = z
+  .object({
+    email: emailSchema.optional(),
+    phone: phoneSchema.optional(),
+    purpose: z.enum(['REGISTER', 'LOGIN']),
+  })
+  .refine((data) => Boolean(data.email) !== Boolean(data.phone), {
+    message: 'Provide exactly one of email or phone',
+    path: ['email'],
+  });
+
+export const otpVerifySchema = z
+  .object({
+    email: emailSchema.optional(),
+    phone: phoneSchema.optional(),
+    purpose: z.enum(['REGISTER', 'LOGIN']),
+    code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
+    device: deviceSchema.optional(),
+  })
+  .refine((data) => Boolean(data.email) !== Boolean(data.phone), {
+    message: 'Provide exactly one of email or phone',
+    path: ['email'],
+  });
+
+const usernameSchema = z.string().trim().toLowerCase();
 
 export const loginSchema = z
   .object({
     email: emailSchema.optional(),
     phone: phoneSchema.optional(),
+    username: usernameSchema.optional(),
     password: z.string().min(1, 'Password is required'),
     device: deviceSchema.optional(),
   })
-  .refine((data) => Boolean(data.email) !== Boolean(data.phone), {
-    message: 'Provide exactly one of email or phone',
+  .refine((data) => [data.email, data.phone, data.username].filter(Boolean).length === 1, {
+    message: 'Provide exactly one of email, phone, or username',
     path: ['email'],
   });
 
@@ -65,3 +96,5 @@ export const refreshSchema = z.object({
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
+export type OtpRequestInput = z.infer<typeof otpRequestSchema>;
+export type OtpVerifyInput = z.infer<typeof otpVerifySchema>;

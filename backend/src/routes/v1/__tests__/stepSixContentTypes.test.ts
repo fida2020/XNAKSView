@@ -275,6 +275,10 @@ describe('Sounds foundation', () => {
 
     const videosUsingSound = await request(app).get(`/api/v1/sounds/${soundId}/videos`).set('Authorization', `Bearer ${reuserReg.body.accessToken}`);
     expect(videosUsingSound.body.videos.some((v: { id: string }) => v.id === reuseUpload.body.id)).toBe(true);
+
+    const list = await request(app).get('/api/v1/sounds').set('Authorization', `Bearer ${reuserReg.body.accessToken}`);
+    expect(list.status).toBe(200);
+    expect(list.body.sounds.some((s: { id: string; usageCount: number }) => s.id === soundId && s.usageCount === 2)).toBe(true);
   });
 
   it('rejects referencing a nonexistent sound id', async () => {

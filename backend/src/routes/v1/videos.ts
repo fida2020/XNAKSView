@@ -7,12 +7,13 @@ import { Router } from 'express';
 import { recordActivity } from '@/lib/activityFeed';
 import { extractHashtags, extractMentionUsernames, syncVideoHashtags, syncVideoMentions } from '@/lib/hashtags';
 import { isBlockedEitherDirection } from '@/lib/messagingAccess';
+import { assertModerationAllowsCreation, moderateText } from '@/lib/moderation/moderationPipeline';
 import { decodeCursor, encodeCursor } from '@/lib/pagination';
 import { prisma } from '@/lib/prisma';
-import { probeVideo } from '@/lib/ffmpeg';
+import { probeAudio, probeVideo } from '@/lib/ffmpeg';
 import { logger } from '@/lib/logger';
 import { redis } from '@/lib/redis';
-import { storage, videoOriginalKey } from '@/lib/storage';
+import { storage, videoOriginalKey, videoVoiceoverKey } from '@/lib/storage';
 import { streamAsset } from '@/lib/mediaStreaming';
 import {
   canViewVideo,
@@ -26,7 +27,7 @@ import {
 import { processVideo } from '@/lib/videoProcessing';
 import { requireAuth } from '@/middleware/auth';
 import { createAuthRateLimiter } from '@/middleware/rateLimit';
-import { uploadSingleVideo } from '@/middleware/upload';
+import { uploadSingleVideo, uploadVideoWithVoiceover } from '@/middleware/upload';
 import { validate } from '@/middleware/validate';
 import { createAddYoursSchema } from '@/schemas/content.schema';
 import {
@@ -37,9 +38,12 @@ import {
   createVideoSchema,
   feedQuerySchema,
   listCommentsQuerySchema,
+  parseVideoEditSpec,
   reportVideoSchema,
   updateVideoSchema,
+  videoEditSpecSchema,
 } from '@/schemas/video.schema';
+import { isEpidemicSoundConfigured } from '@/lib/epidemicSound';
 import { AppError } from '@/utils/AppError';
 
 export const videosRouter = Router();
@@ -91,10 +95,12 @@ videosRouter.post(
   '/videos',
   requireAuth,
   uploadLimiter,
-  uploadSingleVideo('video'),
+  uploadVideoWithVoiceover('video', 'voiceover'),
   validate({ body: createVideoSchema }),
   async (req, res, next) => {
-    const file = req.file;
+    const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+    const file = files?.video?.[0];
+    const voiceoverFile = files?.voiceover?.[0];
     try {
       if (!file) {
         throw new AppError('BAD_REQUEST', 'A "video" file field is required');
@@ -108,13 +114,53 @@ videosRouter.post(
       } catch (probeError) {
         const { unlink } = await import('fs/promises');
         await unlink(file.path).catch(() => {});
+        if (voiceoverFile) await unlink(voiceoverFile.path).catch(() => {});
         throw new AppError(
           'BAD_REQUEST',
           `Uploaded file is not a valid video: ${probeError instanceof Error ? probeError.message : 'unknown error'}`,
         );
       }
 
-      const { caption, visibility, allowDuet, allowStitch, allowDownload, addYoursPrompt, soundId } = req.body;
+      // Video editor rebuild — the real trim/speed/filter/text/rotate/
+      // cover/volume spec, if the client went through the editor rather
+      // than posting a raw clip unedited.
+      let editSpec;
+      try {
+        editSpec = parseVideoEditSpec(req.body.edit);
+      } catch (specError) {
+        const { unlink } = await import('fs/promises');
+        await unlink(file.path).catch(() => {});
+        if (voiceoverFile) await unlink(voiceoverFile.path).catch(() => {});
+        throw new AppError('BAD_REQUEST', specError instanceof Error ? specError.message : 'Invalid edit spec');
+      }
+
+      if (voiceoverFile) {
+        try {
+          await probeAudio(voiceoverFile.path);
+        } catch (probeError) {
+          const { unlink } = await import('fs/promises');
+          await unlink(file.path).catch(() => {});
+          await unlink(voiceoverFile.path).catch(() => {});
+          throw new AppError(
+            'BAD_REQUEST',
+            `Uploaded voice-over is not valid audio: ${probeError instanceof Error ? probeError.message : 'unknown error'}`,
+          );
+        }
+      }
+
+      const {
+        caption,
+        visibility,
+        allowDuet,
+        allowStitch,
+        allowDownload,
+        allowComments,
+        addYoursPrompt,
+        soundId,
+        epidemicTrackId,
+        epidemicTrackTitle,
+        epidemicTrackArtist,
+      } = req.body;
       const videoId = randomUUID();
       const originalKey = videoOriginalKey(videoId, path.extname(file.originalname) || '.mp4');
 
@@ -124,14 +170,45 @@ videosRouter.post(
         if (!sound) {
           const { unlink } = await import('fs/promises');
           await unlink(file.path).catch(() => {});
+          if (voiceoverFile) await unlink(voiceoverFile.path).catch(() => {});
           throw new AppError('NOT_FOUND', 'Sound not found');
         }
         verifiedSoundId = sound.id;
+      }
+      if (epidemicTrackId && !isEpidemicSoundConfigured()) {
+        const { unlink } = await import('fs/promises');
+        await unlink(file.path).catch(() => {});
+        if (voiceoverFile) await unlink(voiceoverFile.path).catch(() => {});
+        throw new AppError('SERVICE_UNAVAILABLE', 'The real music catalog is not configured in this environment');
+      }
+
+      // Step 10 — moderate the caption before the row exists (video/audio-
+      // frame moderation is architecture-only pending a real vendor; see
+      // moderationPipeline.ts/videoAudioModerationProvider.ts).
+      if (caption) {
+        const captionModeration = await moderateText({ contentType: 'VIDEO', contentId: videoId, authorId: req.user!.id, text: caption });
+        assertModerationAllowsCreation(captionModeration, 'video');
       }
 
       // Never trust a client-supplied owner/id — the owner is always the
       // authenticated requester, and the id is always server-generated.
       await storage.putFromLocalPath(originalKey, file.path);
+      let voiceoverKey: string | undefined;
+      if (voiceoverFile) {
+        voiceoverKey = videoVoiceoverKey(videoId, path.extname(voiceoverFile.originalname) || '.m4a');
+        await storage.putFromLocalPath(voiceoverKey, voiceoverFile.path);
+      }
+
+      // A real Epidemic Sound track or a recorded voice-over both need the
+      // real render pipeline even if the user made no other edit — an
+      // editSpec (defaulted) is synthesized here rather than left null so
+      // videoProcessing.ts's `video.editSpec` branch actually runs and
+      // really mixes the audio in, instead of silently plain-transcoding.
+      const needsRenderPipeline = editSpec !== null || Boolean(voiceoverKey) || Boolean(epidemicTrackId);
+      const finalEditSpec = needsRenderPipeline
+        ? { ...(editSpec ?? videoEditSpecSchema.parse({})), voiceoverKey, epidemicTrackId }
+        : undefined;
+
       const video = await prisma.video.create({
         data: {
           id: videoId,
@@ -141,14 +218,31 @@ videosRouter.post(
           allowDuet,
           allowStitch,
           allowDownload,
+          allowComments,
           addYoursPrompt,
           soundId: verifiedSoundId,
           originalKey,
           status: 'PROCESSING',
+          // Persisted (not just applied once) so a retried processing
+          // attempt — see lib/videoProcessing.ts's MAX_ATTEMPTS retry —
+          // reproduces the exact same edit instead of silently falling
+          // back to a plain transcode.
+          editSpec: finalEditSpec,
         },
       });
       if (verifiedSoundId) {
         await prisma.sound.update({ where: { id: verifiedSoundId }, data: { usageCount: { increment: 1 } } });
+      }
+      if (epidemicTrackId && epidemicTrackTitle && epidemicTrackArtist) {
+        // Real usage-based "Recent" — written only now, when the track is
+        // actually attached to a real post, never on mere preview/browse.
+        await prisma.epidemicSoundRecent
+          .upsert({
+            where: { userId_trackId: { userId: req.user!.id, trackId: epidemicTrackId } },
+            create: { userId: req.user!.id, trackId: epidemicTrackId, trackTitle: epidemicTrackTitle, trackArtist: epidemicTrackArtist },
+            update: { usedAt: new Date(), trackTitle: epidemicTrackTitle, trackArtist: epidemicTrackArtist },
+          })
+          .catch((error: unknown) => logger.error({ err: error, videoId: video.id }, 'Failed to record Epidemic Sound recent usage'));
       }
 
       await applyHashtagsAndMentions(video.id, req.user!.id, caption);
@@ -228,10 +322,10 @@ videosRouter.patch(
         throw new AppError('FORBIDDEN', 'You can only edit your own videos');
       }
 
-      const { caption, visibility, allowDuet, allowStitch, allowDownload } = req.body;
+      const { caption, visibility, allowDuet, allowStitch, allowDownload, allowComments, allowGifts } = req.body;
       const updated = await prisma.video.update({
         where: { id: video.id },
-        data: { caption, visibility, allowDuet, allowStitch, allowDownload },
+        data: { caption, visibility, allowDuet, allowStitch, allowDownload, allowComments, allowGifts },
       });
 
       if (caption !== undefined && caption !== video.caption) {
@@ -463,6 +557,9 @@ videosRouter.post(
   async (req, res, next) => {
     try {
       const video = await loadVisibleVideo(req.params.id!, req.user!.id);
+      if (!video.allowComments && video.userId !== req.user!.id) {
+        throw new AppError('FORBIDDEN', 'The creator has turned off comments for this video');
+      }
       const { text, parentId } = req.body;
 
       let parent = null;
@@ -476,9 +573,18 @@ videosRouter.post(
         }
       }
 
+      // Step 10 — unified AI moderation pipeline, checked BEFORE the comment
+      // is ever persisted (a pre-generated id lets the moderation event
+      // reference the eventual row without a create-then-delete race).
+      // Video comments are one of the XNAKView Strict Abuse Rule's named
+      // surfaces (brief §3).
+      const commentId = randomUUID();
+      const moderation = await moderateText({ contentType: 'VIDEO_COMMENT', contentId: commentId, authorId: req.user!.id, text });
+      assertModerationAllowsCreation(moderation, 'comment');
+
       const comment = await prisma.$transaction(async (tx) => {
         const created = await tx.videoComment.create({
-          data: { videoId: video.id, userId: req.user!.id, text, parentId },
+          data: { id: commentId, videoId: video.id, userId: req.user!.id, text, parentId },
           include: commentInclude,
         });
         await tx.video.update({ where: { id: video.id }, data: { commentCount: { increment: 1 } } });

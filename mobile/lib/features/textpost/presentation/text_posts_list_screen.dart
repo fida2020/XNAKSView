@@ -6,16 +6,29 @@ import '../domain/text_post_model.dart';
 import 'text_post_detail_screen.dart';
 import 'text_post_providers.dart';
 
-class TextPostsListScreen extends ConsumerStatefulWidget {
+class TextPostsListScreen extends StatelessWidget {
   const TextPostsListScreen({super.key, required this.userId});
 
   final String userId;
 
   @override
-  ConsumerState<TextPostsListScreen> createState() => _TextPostsListScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(appBar: AppBar(title: const Text('Text posts')), body: TextPostsGrid(userId: userId));
+  }
 }
 
-class _TextPostsListScreenState extends ConsumerState<TextPostsListScreen> {
+/// The grid body only, no `Scaffold`/`AppBar` — embeddable as a profile
+/// content tab or pushed standalone via [TextPostsListScreen] above.
+class TextPostsGrid extends ConsumerStatefulWidget {
+  const TextPostsGrid({super.key, required this.userId});
+
+  final String userId;
+
+  @override
+  ConsumerState<TextPostsGrid> createState() => _TextPostsGridState();
+}
+
+class _TextPostsGridState extends ConsumerState<TextPostsGrid> {
   List<TextPostModel> _posts = [];
   bool _isLoading = true;
 
@@ -38,25 +51,38 @@ class _TextPostsListScreenState extends ConsumerState<TextPostsListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Text posts')),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _posts.isEmpty
-              ? const Center(child: Text('No text posts yet'))
-              : ListView(
-                  children: [
-                    for (final post in _posts)
-                      ListTile(
-                        title: Text(post.text, maxLines: 2, overflow: TextOverflow.ellipsis),
-                        subtitle: Text('${post.likeCount} likes · ${post.commentCount} comments'),
-                        onTap: () async {
-                          await Navigator.of(context).push(MaterialPageRoute(builder: (context) => TextPostDetailScreen(post: post)));
-                          _load();
-                        },
+    return _isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : _posts.isEmpty
+            ? const Center(child: Text('No text posts yet'))
+            : GridView.builder(
+                padding: const EdgeInsets.all(8),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 1),
+                itemCount: _posts.length,
+                itemBuilder: (context, index) {
+                  final post = _posts[index];
+                  return GestureDetector(
+                    onTap: () async {
+                      await Navigator.of(context).push(MaterialPageRoute(builder: (context) => TextPostDetailScreen(post: post)));
+                      _load();
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                  ],
-                ),
-    );
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: Text(post.text, maxLines: 5, overflow: TextOverflow.ellipsis)),
+                          const SizedBox(height: 6),
+                          Text('${post.likeCount} likes · ${post.commentCount} comments', style: const TextStyle(fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
   }
 }

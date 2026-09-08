@@ -183,7 +183,24 @@ class FeedController extends StateNotifier<FeedState> {
 // the comment sheet) can take a single provider type as a parameter.
 final feedControllerProvider = StateNotifierProvider<FeedController, FeedState>((ref) {
   final repository = ref.watch(videoRepositoryProvider);
-  return FeedController(repository, ({cursor}) => repository.fetchFeed(cursor: cursor));
+  return FeedController(repository, ({cursor}) => repository.fetchFeed(cursor: cursor, scope: 'forYou'));
+});
+
+/// The Following tab (brief: TikTok-style For You / Following split) — same
+/// `FeedController`/`FeedState`/`VideoPageView` as the main feed, just
+/// scoped server-side to creators the caller follows.
+final followingFeedControllerProvider = StateNotifierProvider<FeedController, FeedState>((ref) {
+  final repository = ref.watch(videoRepositoryProvider);
+  return FeedController(repository, ({cursor}) => repository.fetchFeed(cursor: cursor, scope: 'following'));
+});
+
+/// The Friends tab (Step 2) — a real mutual follow (both directions),
+/// computed server-side from the same Follow table as Following. No
+/// separate friend-request system exists; this is not a fabricated
+/// relationship layered on top.
+final friendsFeedControllerProvider = StateNotifierProvider<FeedController, FeedState>((ref) {
+  final repository = ref.watch(videoRepositoryProvider);
+  return FeedController(repository, ({cursor}) => repository.fetchFeed(cursor: cursor, scope: 'friends'));
 });
 
 final userVideosControllerProvider = StateNotifierProvider.family<FeedController, FeedState, String>((ref, userId) {
@@ -204,4 +221,16 @@ final searchVideosControllerProvider = StateNotifierProvider.family<FeedControll
 final addYoursResponsesControllerProvider = StateNotifierProvider.family<FeedController, FeedState, String>((ref, promptVideoId) {
   final repository = ref.watch(videoRepositoryProvider);
   return FeedController(repository, ({cursor}) => repository.fetchAddYoursResponses(promptVideoId, cursor: cursor));
+});
+
+/// Backs the shared-link deep link (`xnakview://video/:id`, Share rebuild)
+/// — a real single-video fetch wrapped as a one-item, non-paginated
+/// `FeedPage` so `VideoPageView`/`VideoFeedItem` (like/comment/follow/share/
+/// gift, all real) can be reused unmodified for a single shared video.
+final singleVideoControllerProvider = StateNotifierProvider.family<FeedController, FeedState, String>((ref, videoId) {
+  final repository = ref.watch(videoRepositoryProvider);
+  return FeedController(repository, ({cursor}) async {
+    final video = await repository.fetchVideo(videoId);
+    return FeedPage(videos: [video]);
+  });
 });

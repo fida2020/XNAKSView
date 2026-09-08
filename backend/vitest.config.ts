@@ -6,7 +6,10 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
-    setupFiles: ['src/test/setup.ts'],
+    // env.setup.ts MUST run first: it overwrites process.env.DATABASE_URL to
+    // TEST_DATABASE_URL before setup.ts (or lib/prisma.ts) is ever imported.
+    // See src/test/dbGuard.ts for the shared validation both files use.
+    setupFiles: ['src/test/env.setup.ts', 'src/test/setup.ts'],
     env: { NODE_ENV: 'test' },
     testTimeout: 20_000,
     // beforeAll hooks upload a real sample video and wait for real ffmpeg

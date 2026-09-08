@@ -7,7 +7,10 @@ export type ErrorCode =
   | 'VALIDATION_ERROR'
   | 'RATE_LIMITED'
   | 'INTERNAL_ERROR'
-  | 'SERVICE_UNAVAILABLE';
+  | 'SERVICE_UNAVAILABLE'
+  // Step 7: a well-known, mobile-actionable code — the client matches on
+  // this to show "Not enough Coins" + a "Get Coins" route, not on message text.
+  | 'INSUFFICIENT_COINS';
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   BAD_REQUEST: 400,
@@ -19,6 +22,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   RATE_LIMITED: 429,
   INTERNAL_ERROR: 500,
   SERVICE_UNAVAILABLE: 503,
+  INSUFFICIENT_COINS: 402,
 };
 
 export class AppError extends Error {

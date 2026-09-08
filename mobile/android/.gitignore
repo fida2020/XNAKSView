@@ -12,3 +12,11 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# Banuba Face AR SDK license token — real vendor secret, never committed.
+banuba.properties
+
+# Real Face AR (Banuba SDK) — effect assets are copied here at build time
+# (see app/build.gradle.kts's copyBanubaEffects task) from
+# mobile/banuba_effects, the actual source of truth.
+app/src/main/assets/bnb-resources/

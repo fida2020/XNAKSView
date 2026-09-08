@@ -32,6 +32,22 @@ class AppConfig {
 
   static const String appName = 'XNAKView';
 
+  /// The "Web application" Google OAuth Client ID (from Google Cloud
+  /// Console) that the backend verifies Google ID tokens against
+  /// (GOOGLE_OAUTH_SERVER_CLIENT_ID) — passed to `google_sign_in` as
+  /// `serverClientId` so Google issues a token audienced to this id rather
+  /// than the Android client id. Empty until configured; `google_sign_in`
+  /// then simply won't produce a server-verifiable ID token, and Google
+  /// sign-in fails honestly rather than silently.
+  static const String googleServerClientId = String.fromEnvironment('GOOGLE_OAUTH_SERVER_CLIENT_ID');
+
+  /// Real Face AR (Banuba SDK) client license token — never hard-coded in
+  /// source, read from a build-time define (see mobile's build commands /
+  /// android/banuba.properties.example for where the real value lives
+  /// locally). Empty until configured; `BanubaCameraController.initialize`
+  /// then honestly reports "not configured" rather than silently no-op'ing.
+  static const String banubaClientToken = String.fromEnvironment('BANUBA_CLIENT_TOKEN');
+
   static const Duration apiConnectTimeout = Duration(seconds: 15);
   static const Duration apiReceiveTimeout = Duration(seconds: 15);
 

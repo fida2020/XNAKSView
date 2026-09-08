@@ -3,13 +3,19 @@ import { unlink } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 
+import { env } from '@/config/env';
+import { downloadEpidemicTrack } from '@/lib/epidemicSound';
 import {
   compositeDuetSideBySide,
   compositeStitchConcat,
   generateThumbnail,
   probeVideo,
+  renderEditedVideo,
   transcodeToPlaybackMp4,
+  type ExtraAudioInput,
+  type VideoEditSpec,
 } from '@/lib/ffmpeg';
+import { onContentPublished } from '@/lib/gamification/events';
 import { logger } from '@/lib/logger';
 import { prisma } from '@/lib/prisma';
 import { storage, videoPlaybackKey, videoThumbnailKey } from '@/lib/storage';
@@ -29,10 +35,14 @@ async function runProcessingAttempt(videoId: string, originalKey: string): Promi
   const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
   const original = await storage.getLocalReadPath(originalKey);
   const thumbnailTemp = tempFilePath('.jpg');
-  // The final encoded output — either a plain transcode of `original`, or
-  // the composited Duet/Stitch result, which is already final-format.
+  // The final encoded output — either a plain transcode of `original`, the
+  // composited Duet/Stitch result, or the real editor's render, each
+  // already final-format.
   const finalTemp = tempFilePath('.mp4');
   let sourceLocal: Awaited<ReturnType<typeof storage.getLocalReadPath>> | null = null;
+  const extraAudioLocals: Awaited<ReturnType<typeof storage.getLocalReadPath>>[] = [];
+  let coverAtMs: number | undefined;
+  let epidemicTrackTemp: string | undefined;
 
   try {
     if (video.duetOfVideoId) {
@@ -52,15 +62,53 @@ async function runProcessingAttempt(videoId: string, originalKey: string): Promi
       }
       sourceLocal = await storage.getLocalReadPath(source.playbackKey);
       await compositeStitchConcat(sourceLocal.path, video.stitchSourceStartMs, video.stitchSourceEndMs, original.path, finalTemp);
+    } else if (video.editSpec) {
+      // Video editor rebuild — real trim/speed/filter/text/rotate/volume
+      // render (see lib/ffmpeg.ts's renderEditedVideo). Duet/Stitch above
+      // never carry an editSpec — they keep their own composite pipeline.
+      const spec = video.editSpec as unknown as VideoEditSpec & { voiceoverKey?: string; epidemicTrackId?: string };
+      coverAtMs = spec.coverAtMs;
+
+      const extraAudio: ExtraAudioInput[] = [];
+      if (video.soundId) {
+        const sound = await prisma.sound.findUnique({ where: { id: video.soundId }, include: { sourceVideo: true } });
+        if (sound?.sourceVideo.playbackKey) {
+          const soundLocal = await storage.getLocalReadPath(sound.sourceVideo.playbackKey);
+          extraAudioLocals.push(soundLocal);
+          extraAudio.push({ path: soundLocal.path, volume: spec.soundVolume ?? 1 });
+        } else {
+          logger.warn({ videoId, soundId: video.soundId }, 'Attached Sound has no ready source audio — posting without it');
+        }
+      }
+      if (spec.epidemicTrackId) {
+        // Real licensed music (Epidemic Sound Partner Content API) — a
+        // fresh signed download URL + real audio bytes are fetched right
+        // here, at render time, rather than ever cached/re-served (see
+        // lib/epidemicSound.ts's own doc comment on why).
+        epidemicTrackTemp = tempFilePath('.mp3');
+        await downloadEpidemicTrack(spec.epidemicTrackId, epidemicTrackTemp);
+        extraAudio.push({ path: epidemicTrackTemp, volume: spec.soundVolume ?? 1 });
+      }
+      if (spec.voiceoverKey) {
+        const voiceoverLocal = await storage.getLocalReadPath(spec.voiceoverKey);
+        extraAudioLocals.push(voiceoverLocal);
+        extraAudio.push({ path: voiceoverLocal.path, volume: spec.voiceoverVolume ?? 1 });
+      }
+
+      await renderEditedVideo(original.path, spec, extraAudio, finalTemp, env.DRAWTEXT_FONT_PATH);
     } else {
       await transcodeToPlaybackMp4(original.path, finalTemp);
     }
 
     const probe = await probeVideo(finalTemp);
 
-    // Capture the thumbnail at 1s in, or halfway through very short clips —
-    // never past the end of the video.
-    const thumbnailAtSeconds = Math.min(1, probe.durationMs / 2000);
+    // Capture the thumbnail at the user-chosen cover frame if the editor
+    // spec named one (clamped to the real final duration — a stale choice
+    // from before a later trim/speed edit must never point past the end);
+    // otherwise the existing default (1s in, or halfway through very short
+    // clips, never past the end).
+    const thumbnailAtSeconds =
+      coverAtMs !== undefined ? Math.min(coverAtMs / 1000, Math.max(0, probe.durationMs / 1000 - 0.05)) : Math.min(1, probe.durationMs / 2000);
     await generateThumbnail(finalTemp, thumbnailTemp, thumbnailAtSeconds);
 
     const playbackKey = videoPlaybackKey(videoId);
@@ -68,7 +116,7 @@ async function runProcessingAttempt(videoId: string, originalKey: string): Promi
     await storage.putFromLocalPath(playbackKey, finalTemp);
     await storage.putFromLocalPath(thumbnailKey, thumbnailTemp);
 
-    await prisma.video.update({
+    const readyVideo = await prisma.video.update({
       where: { id: videoId },
       data: {
         status: 'READY',
@@ -80,12 +128,15 @@ async function runProcessingAttempt(videoId: string, originalKey: string): Promi
         processingError: null,
       },
     });
+    onContentPublished(readyVideo.userId, 'VIDEO', readyVideo.id);
   } finally {
     await original.cleanup();
     await sourceLocal?.cleanup();
+    await Promise.allSettled(extraAudioLocals.map((local) => local.cleanup()));
     // putFromLocalPath moves (renames) its source on success, so only a
     // failed attempt (thrown before the move) leaves these temp files behind.
     await cleanupQuietly(thumbnailTemp, finalTemp);
+    if (epidemicTrackTemp) await cleanupQuietly(epidemicTrackTemp);
   }
 }
 

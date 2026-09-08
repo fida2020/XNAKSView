@@ -9,16 +9,30 @@ import '../domain/photo_post_model.dart';
 import 'photo_post_providers.dart';
 import 'photo_post_viewer_screen.dart';
 
-class PhotoPostsListScreen extends ConsumerStatefulWidget {
+class PhotoPostsListScreen extends StatelessWidget {
   const PhotoPostsListScreen({super.key, required this.userId});
 
   final String userId;
 
   @override
-  ConsumerState<PhotoPostsListScreen> createState() => _PhotoPostsListScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(appBar: AppBar(title: const Text('Photo posts')), body: PhotoPostsGrid(userId: userId));
+  }
 }
 
-class _PhotoPostsListScreenState extends ConsumerState<PhotoPostsListScreen> {
+/// The grid body only, no `Scaffold`/`AppBar` — embeddable as a profile
+/// content tab (TikTok's structure) or pushed standalone via
+/// [PhotoPostsListScreen] above.
+class PhotoPostsGrid extends ConsumerStatefulWidget {
+  const PhotoPostsGrid({super.key, required this.userId});
+
+  final String userId;
+
+  @override
+  ConsumerState<PhotoPostsGrid> createState() => _PhotoPostsGridState();
+}
+
+class _PhotoPostsGridState extends ConsumerState<PhotoPostsGrid> {
   List<PhotoPostModel> _posts = [];
   bool _isLoading = true;
 
@@ -41,27 +55,24 @@ class _PhotoPostsListScreenState extends ConsumerState<PhotoPostsListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Photo posts')),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _posts.isEmpty
-              ? const Center(child: Text('No photo posts yet'))
-              : GridView.builder(
-                  padding: const EdgeInsets.all(2),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 2, mainAxisSpacing: 2, childAspectRatio: 9 / 16),
-                  itemCount: _posts.length,
-                  itemBuilder: (context, index) {
-                    final post = _posts[index];
-                    return GestureDetector(
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => PhotoPostViewerScreen(photoPostId: post.id))),
-                      child: post.photos.isEmpty
-                          ? Container(color: Colors.black12, child: const Icon(Icons.image_outlined))
-                          : _AuthenticatedThumbnail(url: post.photos.first.url),
-                    );
-                  },
-                ),
-    );
+    return _isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : _posts.isEmpty
+            ? const Center(child: Text('No photo posts yet'))
+            : GridView.builder(
+                padding: const EdgeInsets.all(2),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 2, mainAxisSpacing: 2, childAspectRatio: 9 / 16),
+                itemCount: _posts.length,
+                itemBuilder: (context, index) {
+                  final post = _posts[index];
+                  return GestureDetector(
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => PhotoPostViewerScreen(photoPostId: post.id))),
+                    child: post.photos.isEmpty
+                        ? Container(color: Colors.black12, child: const Icon(Icons.image_outlined))
+                        : _AuthenticatedThumbnail(url: post.photos.first.url),
+                  );
+                },
+              );
   }
 }
 

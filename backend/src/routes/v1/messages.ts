@@ -12,6 +12,7 @@ import {
   otherParticipantId,
   serializeMessage,
 } from '@/lib/messagingAccess';
+import { assertModerationAllowsCreation, moderateAudio, moderateText } from '@/lib/moderation/moderationPipeline';
 import { streamAsset } from '@/lib/mediaStreaming';
 import { decodeCursor, encodeCursor } from '@/lib/pagination';
 import { prisma } from '@/lib/prisma';
@@ -193,8 +194,18 @@ messagesRouter.post(
         throw new AppError('FORBIDDEN', 'You cannot message this user right now');
       }
 
+      // Step 10 — direct messages are one of the XNAKView Strict Abuse
+      // Rule's named surfaces (brief §3). Evidence stored is a hash of the
+      // text (see moderationPipeline.ts's `hashTextEvidence`), never the
+      // raw message content — brief §5/§15: "do not create unnecessary
+      // permanent storage of raw sensitive content merely for AI analysis."
+      const messageId = randomUUID();
+      const moderation = await moderateText({ contentType: 'MESSAGE', contentId: messageId, authorId: req.user!.id, text: req.body.text });
+      assertModerationAllowsCreation(moderation, 'message');
+
       const message = await prisma.message.create({
         data: {
+          id: messageId,
           conversationId: conversation.id,
           senderId: req.user!.id,
           type: 'TEXT',
@@ -294,6 +305,15 @@ messagesRouter.post(
       const messageId = randomUUID();
       const extension = path.extname(file.originalname) || '.m4a';
       const key = voiceMessageKey(messageId, extension);
+
+      // Step 10 — voice-message moderation (transcribe-then-classify).
+      // Honestly reports "not analyzed" today (no audio AI vendor is
+      // configured in this codebase — see
+      // videoAudioModerationProvider.ts's doc comment) rather than
+      // fabricating a "safe" result; the call/audit-record still happens.
+      const voiceModeration = await moderateAudio({ contentType: 'MESSAGE', contentId: messageId, authorId: req.user!.id, audioStorageKey: key });
+      assertModerationAllowsCreation(voiceModeration, 'message');
+
       await storage.putFromLocalPath(key, file.path);
 
       const message = await prisma.message.create({

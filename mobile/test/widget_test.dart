@@ -9,11 +9,13 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: XnakViewApp()));
     await tester.pump();
 
-    // The splash screen shows the XNAKView wordmark logo (with "XNAKView"
-    // baked into the artwork) rather than a separate text widget.
+    // The splash screen shows the icon-only "X" mark plus a separate
+    // "XNAKView" text wordmark (the launcher-icon artwork itself has no
+    // text baked in — illegible once scaled down to a home-screen icon).
     final logoFinder = find.byWidgetPredicate(
       (widget) => widget is Image && widget.image is AssetImage && (widget.image as AssetImage).assetName == 'assets/branding/xnakview_logo.png',
     );
     expect(logoFinder, findsOneWidget);
+    expect(find.text('XNAKView'), findsOneWidget);
   });
 }

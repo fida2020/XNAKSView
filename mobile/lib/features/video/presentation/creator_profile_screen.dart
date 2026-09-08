@@ -5,14 +5,23 @@ import '../../../core/config/app_config.dart';
 import '../../../core/errors/app_exception.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/storage/secure_storage.dart';
+import '../../../core/theme/xnak_colors.dart';
+import '../../../core/widgets/xnak_avatar.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../photopost/presentation/photo_posts_list_screen.dart';
 import '../../textpost/presentation/text_posts_list_screen.dart';
 import '../domain/user_profile_summary.dart';
 import 'feed_controller.dart';
+import 'profile_menu_sheet.dart';
 import 'video_page_view.dart';
 import 'video_providers.dart';
 
+/// Profile — TikTok's structure: avatar/stats/bio header, a full-width
+/// Edit-profile-or-Follow action, then a sticky content-type tab strip
+/// (Videos/Photos/Text) over a scrolling grid. The menu (☰, self only)
+/// opens [showProfileMenu] — every existing XNAKView capability
+/// (Coins/XNAKView Studio/Playlists/sign out/etc.) lives there instead of a
+/// row of large pill buttons on the header itself.
 class CreatorProfileScreen extends ConsumerStatefulWidget {
   const CreatorProfileScreen({super.key, this.userId});
 
@@ -80,148 +89,112 @@ class _CreatorProfileScreenState extends ConsumerState<CreatorProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final userId = _targetUserId;
-    final videosState = ref.watch(userVideosControllerProvider(userId));
-
+    final profile = _profile;
     return Scaffold(
-      appBar: AppBar(title: Text(_profile?.displayLabel ?? 'Profile')),
+      appBar: AppBar(
+        title: Text(profile?.username != null ? '@${profile!.username}' : (profile?.displayLabel ?? 'Profile')),
+        actions: [
+          if (profile?.isSelf ?? false)
+            IconButton(icon: const Icon(Icons.menu), onPressed: () => showProfileMenu(context, ref)),
+        ],
+      ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(child: Text(_error!))
-              : RefreshIndicator(
-                  onRefresh: () async {
-                    await _load();
-                    await ref.read(userVideosControllerProvider(userId).notifier).loadInitial();
-                  },
-                  child: CustomScrollView(
-                    slivers: [
-                      SliverToBoxAdapter(child: _buildHeader()),
-                      _buildVideoGrid(videosState, userId),
-                    ],
-                  ),
-                ),
+              : profile == null
+                  ? const SizedBox.shrink()
+                  : DefaultTabController(
+                      length: 3,
+                      child: NestedScrollView(
+                        headerSliverBuilder: (context, innerBoxIsScrolled) => [
+                          SliverToBoxAdapter(child: _ProfileHeader(profile: profile, onFollowToggle: _toggleFollow)),
+                          SliverPersistentHeader(
+                            pinned: true,
+                            delegate: _TabBarDelegate(
+                              const TabBar(
+                                tabs: [Tab(icon: Icon(Icons.grid_on)), Tab(icon: Icon(Icons.photo_library_outlined)), Tab(icon: Icon(Icons.text_fields))],
+                              ),
+                            ),
+                          ),
+                        ],
+                        body: TabBarView(
+                          children: [
+                            _VideoGridTab(userId: profile.id),
+                            PhotoPostsGrid(userId: profile.id),
+                            TextPostsGrid(userId: profile.id),
+                          ],
+                        ),
+                      ),
+                    ),
     );
   }
+}
 
-  Widget _buildHeader() {
-    final profile = _profile!;
+class _TabBarDelegate extends SliverPersistentHeaderDelegate {
+  const _TabBarDelegate(this.tabBar);
+  final TabBar tabBar;
+
+  @override
+  double get minExtent => tabBar.preferredSize.height;
+  @override
+  double get maxExtent => tabBar.preferredSize.height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return ColoredBox(color: Theme.of(context).scaffoldBackgroundColor, child: tabBar);
+  }
+
+  @override
+  bool shouldRebuild(covariant _TabBarDelegate oldDelegate) => tabBar != oldDelegate.tabBar;
+}
+
+class _ProfileHeader extends StatelessWidget {
+  const _ProfileHeader({required this.profile, required this.onFollowToggle});
+
+  final UserProfileSummary profile;
+  final VoidCallback onFollowToggle;
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
       child: Column(
         children: [
-          CircleAvatar(
-            radius: 40,
-            backgroundImage: profile.avatarUrl != null ? NetworkImage(profile.avatarUrl!) : null,
-            child: profile.avatarUrl == null ? const Icon(Icons.person, size: 40) : null,
-          ),
-          const SizedBox(height: 8),
-          Text(profile.displayLabel, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          if (profile.bio != null && profile.bio!.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(profile.bio!, textAlign: TextAlign.center),
-          ],
-          const SizedBox(height: 12),
+          XnakAvatar(avatarUrl: profile.avatarUrl, radius: 44, ringed: true),
+          const SizedBox(height: 10),
+          Text(profile.displayLabel, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+          if (profile.username != null) Text('@${profile.username}', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+          const SizedBox(height: 14),
           GestureDetector(
             onTap: () => context.pushFollowers(profile.id),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _CountBlock(label: 'Followers', count: profile.followerCount),
-                const SizedBox(width: 32),
                 _CountBlock(label: 'Following', count: profile.followingCount),
+                const SizedBox(width: 36),
+                _CountBlock(label: 'Followers', count: profile.followerCount),
               ],
             ),
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            alignment: WrapAlignment.center,
-            children: [
-              OutlinedButton.icon(
-                onPressed: () => context.pushPlaylists(userId: profile.id),
-                icon: const Icon(Icons.playlist_play),
-                label: const Text('Playlists'),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => PhotoPostsListScreen(userId: profile.id))),
-                icon: const Icon(Icons.photo_library_outlined),
-                label: const Text('Photos'),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => TextPostsListScreen(userId: profile.id))),
-                icon: const Icon(Icons.text_fields),
-                label: const Text('Text'),
-              ),
-            ],
-          ),
-          if (!profile.isSelf) ...[
+          if (profile.bio != null && profile.bio!.isNotEmpty) ...[
             const SizedBox(height: 12),
-            FilledButton(
-              onPressed: _toggleFollow,
-              child: Text((profile.isFollowedByMe ?? false) ? 'Following' : 'Follow'),
-            ),
+            Text(profile.bio!, textAlign: TextAlign.center),
           ],
-          if (profile.isSelf) ...[
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () => context.pushSuggestedAccounts(),
-              icon: const Icon(Icons.person_search),
-              label: const Text('Discover people'),
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: () => ref.read(authControllerProvider.notifier).signOut(),
-              child: const Text('Sign out'),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVideoGrid(FeedState state, String userId) {
-    if (state.videos.isEmpty && state.status == FeedLoadStatus.loading) {
-      return const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(32), child: Center(child: CircularProgressIndicator())));
-    }
-    if (state.videos.isEmpty) {
-      return const SliverToBoxAdapter(
-        child: Padding(padding: EdgeInsets.all(32), child: Center(child: Text('No videos yet'))),
-      );
-    }
-
-    return SliverPadding(
-      padding: const EdgeInsets.all(2),
-      sliver: SliverGrid(
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 2,
-          mainAxisSpacing: 2,
-          childAspectRatio: 9 / 16,
-        ),
-        delegate: SliverChildBuilderDelegate(
-          (context, index) {
-            final video = state.videos[index];
-            return GestureDetector(
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => Scaffold(
-                    backgroundColor: Colors.black,
-                    body: VideoPageView(
-                      controllerProvider: userVideosControllerProvider(userId),
-                      initialIndex: index,
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: profile.isSelf
+                ? OutlinedButton(onPressed: () {}, child: const Text('Edit profile'))
+                : FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: (profile.isFollowedByMe ?? false) ? null : XnakColors.magenta,
                     ),
+                    onPressed: onFollowToggle,
+                    child: Text((profile.isFollowedByMe ?? false) ? 'Following' : 'Follow'),
                   ),
-                ),
-              ),
-              child: video.thumbnailUrl == null
-                  ? Container(color: Colors.black12, child: const Icon(Icons.hourglass_empty))
-                  : _AuthenticatedThumbnail(path: video.thumbnailUrl!),
-            );
-          },
-          childCount: state.videos.length,
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -240,6 +213,49 @@ class _CountBlock extends StatelessWidget {
         Text('$count', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
         Text(label, style: Theme.of(context).textTheme.bodySmall),
       ],
+    );
+  }
+}
+
+class _VideoGridTab extends ConsumerWidget {
+  const _VideoGridTab({required this.userId});
+
+  final String userId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(userVideosControllerProvider(userId));
+
+    if (state.videos.isEmpty && state.status == FeedLoadStatus.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (state.videos.isEmpty) {
+      return const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('No videos yet')));
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => ref.read(userVideosControllerProvider(userId).notifier).loadInitial(),
+      child: GridView.builder(
+        padding: const EdgeInsets.all(2),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 2, mainAxisSpacing: 2, childAspectRatio: 9 / 16),
+        itemCount: state.videos.length,
+        itemBuilder: (context, index) {
+          final video = state.videos[index];
+          return GestureDetector(
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => Scaffold(
+                  backgroundColor: Colors.black,
+                  body: VideoPageView(controllerProvider: userVideosControllerProvider(userId), initialIndex: index),
+                ),
+              ),
+            ),
+            child: video.thumbnailUrl == null
+                ? Container(color: Colors.black12, child: const Icon(Icons.hourglass_empty))
+                : _AuthenticatedThumbnail(path: video.thumbnailUrl!),
+          );
+        },
+      ),
     );
   }
 }

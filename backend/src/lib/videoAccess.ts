@@ -99,6 +99,8 @@ export function serializeVideo(video: Video, extras: SerializeVideoExtras = {}) 
     allowDuet: video.allowDuet,
     allowStitch: video.allowStitch,
     allowDownload: video.allowDownload,
+    allowComments: video.allowComments,
+    allowGifts: video.allowGifts,
     duetOfVideoId: video.duetOfVideoId,
     stitchOfVideoId: video.stitchOfVideoId,
     addYoursPrompt: video.addYoursPrompt,

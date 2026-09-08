@@ -54,6 +54,15 @@ class RateLimitedException extends AppException {
   const RateLimitedException([super.message = 'Too many attempts. Please wait and try again.']);
 }
 
+/// The server's well-known `INSUFFICIENT_COINS` code (HTTP 402) — a Gift
+/// send that the sender's Coin balance can't cover. Modeled as its own type
+/// (not a generic [ForbiddenException]/[ServerException]) so the Gift picker
+/// can match on it specifically and show a "Get Coins" route rather than a
+/// bare error message.
+class InsufficientCoinsException extends AppException {
+  const InsufficientCoinsException([super.message = 'Not enough Coins to send this Gift.']);
+}
+
 class UnknownException extends AppException {
   // ignore: use_super_parameters
   const UnknownException([String message = 'Something went wrong. Please try again.', Object? cause])
